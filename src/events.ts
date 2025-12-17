@@ -1,4 +1,9 @@
-import type { EventType, NormalizedEvent, Provider } from "./types.js";
+import type {
+  EventType,
+  NormalizedEvent,
+  Provider,
+  CurrencyCode,
+} from "./types.js";
 import { getProvider } from "./providers/factory.js";
 
 /**
@@ -174,7 +179,7 @@ export function normalizeEvent(
 
   // Extract data from provider-specific event structure
   let amount: number | undefined;
-  let currency: string | undefined;
+  let currency: CurrencyCode | undefined;
   let email: string | undefined;
   let subscriptionId: string | undefined;
   let paymentId: string | undefined;
@@ -185,7 +190,7 @@ export function normalizeEvent(
     amount = typeof data.amount === "number" ? data.amount / 100 : undefined; // Stripe uses cents
     currency =
       typeof data.currency === "string"
-        ? data.currency.toUpperCase()
+        ? (data.currency.toUpperCase() as CurrencyCode)
         : undefined;
     email =
       typeof data.customer_email === "string" ? data.customer_email : undefined;
@@ -199,7 +204,7 @@ export function normalizeEvent(
     amount = typeof data.amount === "number" ? data.amount : undefined;
     currency =
       typeof data.currency_code === "string"
-        ? data.currency_code.toUpperCase()
+        ? (data.currency_code.toUpperCase() as CurrencyCode)
         : undefined;
     email =
       typeof data.customer_email === "string" ? data.customer_email : undefined;
@@ -222,9 +227,9 @@ export function normalizeEvent(
       typeof resource.amount === "object" && resource.amount !== null
         ? typeof (resource.amount as { currency_code: unknown })
             .currency_code === "string"
-          ? (
+          ? ((
               resource.amount as { currency_code: string }
-            ).currency_code.toUpperCase()
+            ).currency_code.toUpperCase() as CurrencyCode)
           : undefined
         : undefined;
     subscriptionId = typeof resource.id === "string" ? resource.id : undefined;
@@ -241,9 +246,9 @@ export function normalizeEvent(
           : undefined;
     currency =
       typeof data.price_currency === "string"
-        ? data.price_currency.toUpperCase()
+        ? (data.price_currency.toUpperCase() as CurrencyCode)
         : typeof data.currency === "string"
-          ? data.currency.toUpperCase()
+          ? (data.currency.toUpperCase() as CurrencyCode)
           : undefined;
     email =
       typeof data.customer_email === "string"
@@ -283,7 +288,7 @@ export function normalizeEvent(
 
     currency =
       typeof attributes.currency === "string"
-        ? attributes.currency.toUpperCase()
+        ? (attributes.currency.toUpperCase() as CurrencyCode)
         : undefined;
 
     email =
@@ -314,7 +319,7 @@ export function normalizeEvent(
     amount = typeof event.amount === "number" ? event.amount : undefined;
     currency =
       typeof event.currency === "string"
-        ? event.currency.toUpperCase()
+        ? (event.currency.toUpperCase() as CurrencyCode)
         : undefined;
     email = typeof event.email === "string" ? event.email : undefined;
     subscriptionId =

@@ -4,6 +4,7 @@ import type {
   ChargeResult,
   SubscribeInput,
   SubscriptionResult,
+  CurrencyCode,
 } from "../types.js";
 import { isSandbox } from "./env.js";
 
@@ -233,7 +234,8 @@ export class PayPalProvider implements PaymentProvider {
     const amount = captureData?.amount
       ? parseFloat(captureData.amount.value)
       : 0;
-    const currency = captureData?.amount?.currency_code || "USD";
+    const currency = (captureData?.amount?.currency_code?.toUpperCase() ||
+      "USD") as CurrencyCode;
 
     return {
       id: capture.id,
@@ -343,22 +345,25 @@ export class PayPalProvider implements PaymentProvider {
     };
 
     // Extract currency from various possible locations
-    let currency = "USD";
+    let currency: CurrencyCode = "USD";
     if (subscription.billing_info?.outstanding_balance?.currency_code) {
-      currency = subscription.billing_info.outstanding_balance.currency_code;
+      currency =
+        subscription.billing_info.outstanding_balance.currency_code.toUpperCase() as CurrencyCode;
     } else if (subscription.billing_info?.last_payment?.amount?.currency_code) {
-      currency = subscription.billing_info.last_payment.amount.currency_code;
+      currency =
+        subscription.billing_info.last_payment.amount.currency_code.toUpperCase() as CurrencyCode;
     } else if (
       subscription.plan?.payment_preferences?.setup_fee?.currency_code
     ) {
-      currency = subscription.plan.payment_preferences.setup_fee.currency_code;
+      currency =
+        subscription.plan.payment_preferences.setup_fee.currency_code.toUpperCase() as CurrencyCode;
     }
 
     return {
       id: subscription.id,
       status: "cancelled",
       plan: subscription.plan_id || "unknown",
-      currency: currency.toUpperCase(),
+      currency,
       provider: this.name,
     };
   }
@@ -402,22 +407,25 @@ export class PayPalProvider implements PaymentProvider {
     };
 
     // Extract currency from various possible locations
-    let currency = "USD";
+    let currency: CurrencyCode = "USD";
     if (subscription.billing_info?.outstanding_balance?.currency_code) {
-      currency = subscription.billing_info.outstanding_balance.currency_code;
+      currency =
+        subscription.billing_info.outstanding_balance.currency_code.toUpperCase() as CurrencyCode;
     } else if (subscription.billing_info?.last_payment?.amount?.currency_code) {
-      currency = subscription.billing_info.last_payment.amount.currency_code;
+      currency =
+        subscription.billing_info.last_payment.amount.currency_code.toUpperCase() as CurrencyCode;
     } else if (
       subscription.plan?.payment_preferences?.setup_fee?.currency_code
     ) {
-      currency = subscription.plan.payment_preferences.setup_fee.currency_code;
+      currency =
+        subscription.plan.payment_preferences.setup_fee.currency_code.toUpperCase() as CurrencyCode;
     }
 
     return {
       id: subscription.id,
       status: "paused",
       plan: subscription.plan_id || "unknown",
-      currency: currency.toUpperCase(),
+      currency,
       provider: this.name,
     };
   }
@@ -461,22 +469,25 @@ export class PayPalProvider implements PaymentProvider {
     };
 
     // Extract currency from various possible locations
-    let currency = "USD";
+    let currency: CurrencyCode = "USD";
     if (subscription.billing_info?.outstanding_balance?.currency_code) {
-      currency = subscription.billing_info.outstanding_balance.currency_code;
+      currency =
+        subscription.billing_info.outstanding_balance.currency_code.toUpperCase() as CurrencyCode;
     } else if (subscription.billing_info?.last_payment?.amount?.currency_code) {
-      currency = subscription.billing_info.last_payment.amount.currency_code;
+      currency =
+        subscription.billing_info.last_payment.amount.currency_code.toUpperCase() as CurrencyCode;
     } else if (
       subscription.plan?.payment_preferences?.setup_fee?.currency_code
     ) {
-      currency = subscription.plan.payment_preferences.setup_fee.currency_code;
+      currency =
+        subscription.plan.payment_preferences.setup_fee.currency_code.toUpperCase() as CurrencyCode;
     }
 
     return {
       id: subscription.id,
       status: "active",
       plan: subscription.plan_id || "unknown",
-      currency: currency.toUpperCase(),
+      currency,
       provider: this.name,
     };
   }

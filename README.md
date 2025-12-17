@@ -930,6 +930,96 @@ const result: ChargeResult = await pay.charge({
 
 ---
 
+## 💱 Supported Currencies
+
+The SDK includes a comprehensive `Currency` enum with all currencies supported by Stripe, PayPal, Paddle, Lemon Squeezy, and Polar providers. This provides type safety and autocomplete support for currency codes.
+
+### Using the Currency Enum
+
+```typescript
+import { pay, Currency } from "@paylayer/core";
+
+// Use the enum for type safety and autocomplete
+const result = await pay.charge({
+  amount: 29.99,
+  currency: Currency.USD, // TypeScript autocomplete available
+  email: "customer@example.com",
+});
+
+// String literals also work for backward compatibility
+const result2 = await pay.charge({
+  amount: 29.99,
+  currency: "USD", // Also valid
+  email: "customer@example.com",
+});
+```
+
+### Available Currencies
+
+The `Currency` enum includes over 150+ currencies based on ISO 4217 standard. Here are some commonly used currencies:
+
+**Major Currencies:**
+
+- `Currency.USD` - United States Dollar
+- `Currency.EUR` - Euro
+- `Currency.GBP` - British Pound Sterling
+- `Currency.JPY` - Japanese Yen
+- `Currency.AUD` - Australian Dollar
+- `Currency.CAD` - Canadian Dollar
+- `Currency.CHF` - Swiss Franc
+- `Currency.CNY` - Chinese Yuan
+- `Currency.HKD` - Hong Kong Dollar
+- `Currency.NZD` - New Zealand Dollar
+- `Currency.SGD` - Singapore Dollar
+
+**Other Supported Currencies:**
+
+- `Currency.SEK` - Swedish Krona
+- `Currency.NOK` - Norwegian Krone
+- `Currency.DKK` - Danish Krone
+- `Currency.PLN` - Polish Złoty
+- `Currency.CZK` - Czech Koruna
+- `Currency.HUF` - Hungarian Forint
+- `Currency.BRL` - Brazilian Real
+- `Currency.MXN` - Mexican Peso
+- `Currency.INR` - Indian Rupee
+- `Currency.KRW` - South Korean Won
+- `Currency.THB` - Thai Baht
+- `Currency.PHP` - Philippine Peso
+- `Currency.MYR` - Malaysian Ringgit
+- `Currency.TWD` - New Taiwan Dollar
+- `Currency.ILS` - Israeli New Shekel
+- `Currency.RUB` - Russian Ruble
+- `Currency.ZAR` - South African Rand
+
+And many more! The enum includes currencies from all major regions including:
+
+- Americas (USD, CAD, MXN, BRL, ARS, CLP, COP, etc.)
+- Europe (EUR, GBP, CHF, SEK, NOK, DKK, PLN, CZK, HUF, etc.)
+- Asia-Pacific (JPY, CNY, INR, KRW, THB, PHP, MYR, TWD, SGD, AUD, NZD, etc.)
+- Middle East & Africa (AED, SAR, ZAR, EGP, NGN, KES, etc.)
+
+For a complete list, refer to the `Currency` enum in the TypeScript definitions or use your IDE's autocomplete feature.
+
+### Type Safety
+
+The `Currency` enum provides compile-time type checking:
+
+```typescript
+import { Currency } from "@paylayer/core";
+
+// ✅ Valid - TypeScript will autocomplete
+const currency: Currency = Currency.USD;
+
+// ✅ Valid - String literals work too
+const currency2: Currency = "USD";
+
+// ❌ Invalid - TypeScript will error
+const currency3: Currency = "INVALID"; // Error: Type '"INVALID"' is not assignable to type 'Currency'
+```
+
+---
+
 ## 🔒 Security
 
 - ✅ **Webhook Signature Verification** - All webhook signatures are verified using provider-specific methods (HMAC SHA256 for most providers)

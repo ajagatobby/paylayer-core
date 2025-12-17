@@ -17,4 +17,5 @@ Object.assign(pay, {
 });
 
 export { pay };
+export { Currency } from "./types.js";
 export type * from "./types.js";
