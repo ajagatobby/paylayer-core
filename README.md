@@ -10,7 +10,7 @@
 
 A production-grade, provider-agnostic payments SDK for Node.js that provides a unified API for one-time payments, subscriptions, and webhooks across multiple payment providers.
 
-[Features](#-features) • [Installation](#-installation) • [Quick Start](#-quick-start) • [API Reference](#-api-reference) • [Providers](#-supported-providers)
+[Features](#-features) • [Installation](#-installation) • [Quick Start](#-quick-start) • [Configuration](#-configuration) • [API Reference](#-api-reference) • [Providers](#-supported-providers)
 
 </div>
 
@@ -21,16 +21,21 @@ A production-grade, provider-agnostic payments SDK for Node.js that provides a u
 - [Features](#-features)
 - [Installation](#-installation)
 - [Quick Start](#-quick-start)
-  - [Environment Setup](#environment-setup)
-  - [One-Time Payment](#one-time-payment)
-  - [Subscription](#subscription)
+  - [Step 1: Install the Package](#step-1-install-the-package)
+  - [Step 2: Configure Environment Variables](#step-2-configure-environment-variables)
+  - [Step 3: Use the SDK](#step-3-use-the-sdk)
+- [Configuration](#-configuration)
+  - [Core Configuration](#core-configuration)
+  - [Provider-Specific Configuration](#provider-specific-configuration)
+  - [Environment Variable Examples](#environment-variable-examples)
+- [API Reference](#-api-reference)
+  - [One-Time Payments](#one-time-payments)
+  - [Subscriptions](#subscriptions)
   - [Billing Portal](#billing-portal)
   - [Webhooks](#webhooks)
-- [API Reference](#-api-reference)
 - [Event Object Shape](#-event-object-shape)
 - [Supported Providers](#-supported-providers)
-- [Provider Configuration](#-provider-configuration)
-- [Environment Variables](#-environment-variables)
+- [Provider Setup Guides](#-provider-setup-guides)
 - [TypeScript](#-typescript)
 - [Security](#-security)
 - [Error Handling](#-error-handling)
@@ -63,15 +68,31 @@ npm install @paylayer/core
 
 ## 🚀 Quick Start
 
-### Environment Setup
-
-Set your payment provider in environment variables:
+### Step 1: Install the Package
 
 ```bash
-export PAYLAYER_PROVIDER=stripe  # or 'paddle', 'paypal', 'lemonsqueezy', 'polar'
+npm install @paylayer/core
 ```
 
-### One-Time Payment
+### Step 2: Configure Environment Variables
+
+Create a `.env` file in your project root (or configure your environment variables):
+
+```bash
+# Choose your payment provider
+PAYLAYER_PROVIDER=stripe
+
+# Set environment mode (optional, defaults to "production")
+PAYLAYER_ENVIRONMENT=production  # or "sandbox" for testing
+
+# Provider-specific credentials (see Configuration section below)
+STRIPE_SECRET_KEY=YOUR_STRIPE_SECRET_KEY_HERE
+STRIPE_WEBHOOK_SECRET=YOUR_STRIPE_WEBHOOK_SECRET_HERE
+```
+
+> **💡 Tip:** See the [Configuration](#-configuration) section for complete setup instructions for each provider.
+
+### Step 3: Use the SDK
 
 ```typescript
 import { pay } from "@paylayer/core";
@@ -87,31 +108,467 @@ console.log("Payment ID:", result.id);
 console.log("Status:", result.status);
 ```
 
-### Subscription
+---
+
+## ⚙️ Configuration
+
+### Core Configuration
+
+Every PayLayer setup requires two core environment variables:
+
+#### `PAYLAYER_PROVIDER` (Required)
+
+**Purpose:** Specifies which payment provider to use.
+
+**Valid Values:**
+
+- `stripe` - Stripe payments
+- `paddle` - Paddle merchant of record
+- `paypal` - PayPal payments
+- `lemonsqueezy` - Lemon Squeezy checkout
+- `polar` - Polar.sh billing infrastructure
+- `mock` - Mock provider for testing (no real payments)
+
+**Example:**
+
+```bash
+PAYLAYER_PROVIDER=stripe
+```
+
+#### `PAYLAYER_ENVIRONMENT` (Optional)
+
+**Purpose:** Unified environment mode that applies to all providers. Controls whether the SDK operates in test/sandbox mode or production mode.
+
+**Valid Values:**
+
+- `sandbox` or `test` - Test/sandbox environment (no real charges)
+- `production` or `live` - Production environment (real charges)
+
+**Default:** `production` (if not set)
+
+**How it works:**
+
+- When set to `sandbox` or `test`, all providers use their test/sandbox APIs
+- When set to `production` or `live`, all providers use their production APIs
+- Stripe automatically detects mode from API key prefix (`sk_test_` vs `sk_live_`), but this variable validates consistency
+- For backward compatibility, provider-specific variables (`PADDLE_SANDBOX`, `PAYPAL_SANDBOX`, etc.) are still supported if `PAYLAYER_ENVIRONMENT` is not set
+
+**Example:**
+
+```bash
+# For testing/development
+PAYLAYER_ENVIRONMENT=sandbox
+
+# For production
+PAYLAYER_ENVIRONMENT=production
+```
+
+---
+
+### Provider-Specific Configuration
+
+Each payment provider requires specific credentials and configuration. Choose your provider below:
+
+#### 🔵 Stripe
+
+**Required Variables:**
+
+| Variable                | Description                                       | Where to Find                                                                             |
+| ----------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `STRIPE_SECRET_KEY`     | Your Stripe secret API key                        | [Stripe Dashboard](https://dashboard.stripe.com/apikeys) → API Keys → Secret key          |
+| `STRIPE_WEBHOOK_SECRET` | Webhook signing secret for signature verification | [Stripe Dashboard](https://dashboard.stripe.com/webhooks) → Add endpoint → Signing secret |
+
+**Optional Variables:**
+
+| Variable                   | Description                                           | Default                   |
+| -------------------------- | ----------------------------------------------------- | ------------------------- |
+| `STRIPE_PORTAL_RETURN_URL` | URL where customers return after using billing portal | `https://app.example.com` |
+
+**Important Notes:**
+
+- Stripe automatically detects test vs production mode from the API key prefix:
+  - Test keys start with `sk_test_`
+  - Live keys start with `sk_live_`
+- The `PAYLAYER_ENVIRONMENT` variable validates that your environment mode matches your API key type
+- You'll get warnings if there's a mismatch (e.g., `PAYLAYER_ENVIRONMENT=production` with a `sk_test_` key)
+
+**Setup Steps:**
+
+1. Create a Stripe account at [stripe.com](https://stripe.com)
+2. Get your API keys from the [Stripe Dashboard](https://dashboard.stripe.com/apikeys)
+3. Create prices in your Stripe dashboard and set a `lookup_key` for each plan
+4. Use the `lookup_key` as the `plan` parameter in `pay.subscribe()`
+5. Set up webhooks in the [Stripe Dashboard](https://dashboard.stripe.com/webhooks) and copy the signing secret
+
+---
+
+#### 🟢 Paddle
+
+**Required Variables:**
+
+| Variable                  | Description                           | Where to Find                                                                                                 |
+| ------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `PADDLE_API_KEY`          | Your Paddle API key                   | [Paddle Dashboard](https://vendors.paddle.com/) → Developer Tools → Authentication → API Keys                 |
+| `PADDLE_WEBHOOK_SECRET`   | Webhook signing secret                | [Paddle Dashboard](https://vendors.paddle.com/) → Developer Tools → Notifications → Webhooks → Signing Secret |
+| `PADDLE_DEFAULT_PRICE_ID` | Default price ID for one-time charges | [Paddle Dashboard](https://vendors.paddle.com/) → Catalog → Prices → Copy Price ID                            |
+
+**Optional Variables:**
+
+| Variable                 | Description                              | Default                                       |
+| ------------------------ | ---------------------------------------- | --------------------------------------------- |
+| `PADDLE_BASE_URL`        | API base URL (usually not needed)        | Auto-detected based on `PAYLAYER_ENVIRONMENT` |
+| `PADDLE_SANDBOX`         | Set to `"true"` for sandbox (deprecated) | Use `PAYLAYER_ENVIRONMENT=sandbox` instead    |
+| `PADDLE_PORTAL_BASE_URL` | Customer portal base URL                 | Auto-configured                               |
+
+**Setup Steps:**
+
+1. Create a Paddle account at [paddle.com](https://paddle.com)
+2. Get your API key from the [Paddle Dashboard](https://vendors.paddle.com/)
+3. Create prices in your Paddle dashboard
+4. Use price IDs as the `plan` parameter in `pay.subscribe()`
+5. Set up webhooks and copy the signing secret
+
+---
+
+#### 🟡 PayPal
+
+**Required Variables:**
+
+| Variable                | Description                           | Where to Find                                                                                                             |
+| ----------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `PAYPAL_CLIENT_ID`      | Your PayPal application client ID     | [PayPal Developer Dashboard](https://developer.paypal.com/dashboard/) → My Apps & Credentials → App → Client ID           |
+| `PAYPAL_CLIENT_SECRET`  | Your PayPal application client secret | [PayPal Developer Dashboard](https://developer.paypal.com/dashboard/) → My Apps & Credentials → App → Secret              |
+| `PAYPAL_WEBHOOK_SECRET` | Webhook signing secret                | [PayPal Developer Dashboard](https://developer.paypal.com/dashboard/) → My Apps & Credentials → Webhooks → Signing Secret |
+
+**Optional Variables:**
+
+| Variable                 | Description                              | Default                                       |
+| ------------------------ | ---------------------------------------- | --------------------------------------------- |
+| `PAYPAL_BASE_URL`        | API base URL (usually not needed)        | Auto-detected based on `PAYLAYER_ENVIRONMENT` |
+| `PAYPAL_SANDBOX`         | Set to `"true"` for sandbox (deprecated) | Use `PAYLAYER_ENVIRONMENT=sandbox` instead    |
+| `PAYPAL_BRAND_NAME`      | Brand name shown in PayPal checkout      | Your app name                                 |
+| `PAYPAL_RETURN_URL`      | URL where customers return after payment | Required for `charge()` method                |
+| `PAYPAL_CANCEL_URL`      | URL where customers go if they cancel    | Required for `charge()` method                |
+| `PAYPAL_PORTAL_BASE_URL` | Customer portal base URL                 | Auto-configured                               |
+
+**Setup Steps:**
+
+1. Create a PayPal Developer account at [developer.paypal.com](https://developer.paypal.com)
+2. Create an app in the [PayPal Developer Dashboard](https://developer.paypal.com/dashboard/)
+3. Copy your Client ID and Secret
+4. Create billing plans in PayPal dashboard
+5. Use plan IDs as the `plan` parameter in `pay.subscribe()`
+6. Set up webhooks and copy the signing secret
+
+---
+
+#### 🟣 Lemon Squeezy
+
+**Required Variables:**
+
+| Variable                          | Description                             | Where to Find                                                                                          |
+| --------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `LEMONSQUEEZY_API_KEY`            | Your Lemon Squeezy API key              | [Lemon Squeezy Dashboard](https://app.lemonsqueezy.com/settings/api) → API Keys → Create API Key       |
+| `LEMONSQUEEZY_WEBHOOK_SECRET`     | Webhook signing secret                  | [Lemon Squeezy Dashboard](https://app.lemonsqueezy.com/settings/webhooks) → Webhook → Signing Secret   |
+| `LEMONSQUEEZY_STORE_ID`           | Your store ID                           | [Lemon Squeezy Dashboard](https://app.lemonsqueezy.com/stores) → Store → Copy Store ID                 |
+| `LEMONSQUEEZY_DEFAULT_VARIANT_ID` | Default variant ID for one-time charges | [Lemon Squeezy Dashboard](https://app.lemonsqueezy.com/products) → Product → Variant → Copy Variant ID |
+
+**Optional Variables:**
+
+| Variable                       | Description                                | Default                                    |
+| ------------------------------ | ------------------------------------------ | ------------------------------------------ |
+| `LEMONSQUEEZY_BASE_URL`        | API base URL (usually not needed)          | `https://api.lemonsqueezy.com`             |
+| `LEMONSQUEEZY_TEST_MODE`       | Set to `"true"` for test mode (deprecated) | Use `PAYLAYER_ENVIRONMENT=sandbox` instead |
+| `LEMONSQUEEZY_PORTAL_BASE_URL` | Customer portal base URL                   | Auto-configured                            |
+
+**Setup Steps:**
+
+1. Create a Lemon Squeezy account at [lemonsqueezy.com](https://lemonsqueezy.com)
+2. Create a store in your dashboard
+3. Create products and variants in your dashboard
+4. Get your API key from settings
+5. Use variant IDs as the `plan` parameter in `pay.subscribe()`
+6. Set up webhooks and copy the signing secret
+
+---
+
+#### 🟠 Polar.sh
+
+**Required Variables:**
+
+| Variable                            | Description                                    | Where to Find                                                                         |
+| ----------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `POLAR_OAT` or `POLAR_ACCESS_TOKEN` | Your Polar Organization Access Token (OAT)     | [Polar Dashboard](https://polar.sh/dashboard) → Settings → Access Tokens → Create OAT |
+| `POLAR_WEBHOOK_SECRET`              | Webhook signing secret (may be base64 encoded) | [Polar Dashboard](https://polar.sh/dashboard) → Settings → Webhooks → Signing Secret  |
+| `POLAR_DEFAULT_PRODUCT_ID`          | Default product ID for one-time charges        | [Polar Dashboard](https://polar.sh/dashboard) → Products → Copy Product ID            |
+
+**Optional Variables:**
+
+| Variable            | Description                              | Default                                       |
+| ------------------- | ---------------------------------------- | --------------------------------------------- |
+| `POLAR_BASE_URL`    | API base URL (usually not needed)        | Auto-detected based on `PAYLAYER_ENVIRONMENT` |
+| `POLAR_SANDBOX`     | Set to `"true"` for sandbox (deprecated) | Use `PAYLAYER_ENVIRONMENT=sandbox` instead    |
+| `POLAR_SUCCESS_URL` | Success URL after payment                | `https://app.example.com/success`             |
+
+**Setup Steps:**
+
+1. Create a Polar account at [polar.sh](https://polar.sh)
+2. Create an Organization Access Token (OAT) in your dashboard
+3. Create products with subscription prices in your dashboard
+4. Use the product ID as the `plan` parameter in `pay.subscribe()`
+5. For one-time charges, set `POLAR_DEFAULT_PRODUCT_ID` to a product ID
+6. Configure webhook endpoint in Polar dashboard and copy the signing secret
+
+---
+
+### Environment Variable Examples
+
+Here are complete `.env` file examples for each provider:
+
+#### Stripe Example
+
+```bash
+# Core configuration
+PAYLAYER_PROVIDER=stripe
+PAYLAYER_ENVIRONMENT=production
+
+# Stripe credentials
+STRIPE_SECRET_KEY=YOUR_STRIPE_SECRET_KEY_HERE
+STRIPE_WEBHOOK_SECRET=YOUR_STRIPE_WEBHOOK_SECRET_HERE
+
+# Optional: Billing portal return URL
+STRIPE_PORTAL_RETURN_URL=https://myapp.com/settings/billing
+```
+
+#### Paddle Example
+
+```bash
+# Core configuration
+PAYLAYER_PROVIDER=paddle
+PAYLAYER_ENVIRONMENT=sandbox
+
+# Paddle credentials
+PADDLE_API_KEY=YOUR_PADDLE_API_KEY_HERE
+PADDLE_WEBHOOK_SECRET=YOUR_PADDLE_WEBHOOK_SECRET_HERE
+PADDLE_DEFAULT_PRICE_ID=pri_YOUR_PRICE_ID_HERE
+```
+
+#### PayPal Example
+
+```bash
+# Core configuration
+PAYLAYER_PROVIDER=paypal
+PAYLAYER_ENVIRONMENT=sandbox
+
+# PayPal credentials
+PAYPAL_CLIENT_ID=YOUR_PAYPAL_CLIENT_ID_HERE
+PAYPAL_CLIENT_SECRET=YOUR_PAYPAL_CLIENT_SECRET_HERE
+PAYPAL_WEBHOOK_SECRET=YOUR_PAYPAL_WEBHOOK_SECRET_HERE
+
+# Optional: Checkout URLs
+PAYPAL_RETURN_URL=https://myapp.com/payment/success
+PAYPAL_CANCEL_URL=https://myapp.com/payment/cancel
+PAYPAL_BRAND_NAME=My Awesome App
+```
+
+#### Lemon Squeezy Example
+
+```bash
+# Core configuration
+PAYLAYER_PROVIDER=lemonsqueezy
+PAYLAYER_ENVIRONMENT=production
+
+# Lemon Squeezy credentials
+LEMONSQUEEZY_API_KEY=YOUR_LEMONSQUEEZY_API_KEY_HERE
+LEMONSQUEEZY_WEBHOOK_SECRET=YOUR_LEMONSQUEEZY_WEBHOOK_SECRET_HERE
+LEMONSQUEEZY_STORE_ID=YOUR_STORE_ID_HERE
+LEMONSQUEEZY_DEFAULT_VARIANT_ID=YOUR_VARIANT_ID_HERE
+```
+
+#### Polar.sh Example
+
+```bash
+# Core configuration
+PAYLAYER_PROVIDER=polar
+PAYLAYER_ENVIRONMENT=production
+
+# Polar credentials
+POLAR_OAT=YOUR_POLAR_OAT_HERE
+POLAR_WEBHOOK_SECRET=YOUR_POLAR_WEBHOOK_SECRET_HERE
+POLAR_DEFAULT_PRODUCT_ID=prod_YOUR_PRODUCT_ID_HERE
+
+# Optional: Success URL
+POLAR_SUCCESS_URL=https://myapp.com/payment/success
+```
+
+---
+
+## 📚 API Reference
+
+### One-Time Payments
+
+#### `pay.charge(input)`
+
+Creates a one-time payment charge. The customer will be redirected to the provider's checkout page to complete payment.
+
+**Parameters:**
+
+| Parameter  | Type     | Required | Description                                     |
+| ---------- | -------- | -------- | ----------------------------------------------- |
+| `amount`   | `number` | ✅       | Payment amount (e.g., `29.99` for $29.99)       |
+| `currency` | `string` | ✅       | ISO 4217 currency code (e.g., `'USD'`, `'EUR'`) |
+| `email`    | `string` | ❌       | Customer email address                          |
+
+**Returns:** `Promise<ChargeResult>`
+
+**Example:**
+
+```typescript
+import { pay } from "@paylayer/core";
+
+const result = await pay.charge({
+  amount: 29.99,
+  currency: "USD",
+  email: "customer@example.com",
+});
+
+console.log("Payment ID:", result.id);
+console.log("Status:", result.status); // "pending" | "succeeded" | "failed"
+console.log("Amount:", result.amount);
+console.log("Currency:", result.currency);
+```
+
+**Return Type:**
+
+```typescript
+interface ChargeResult {
+  id: string; // Payment ID from provider
+  status: "pending" | "succeeded" | "failed";
+  amount: number; // Payment amount
+  currency: string; // ISO 4217 currency code
+  provider: string; // Provider name (e.g., "stripe")
+  email?: string; // Customer email if provided
+}
+```
+
+---
+
+### Subscriptions
+
+#### `pay.subscribe(input)`
+
+Creates a new subscription for a customer. The customer will be redirected to complete the subscription setup.
+
+**Parameters:**
+
+| Parameter  | Type     | Required | Description                                                                                                                                                                                                                                                                                                                                       |
+| ---------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plan`     | `string` | ✅       | Subscription plan identifier. Format varies by provider:<br>- **Stripe**: `lookup_key` (e.g., `"pro-monthly"`)<br>- **Paddle**: Price ID (e.g., `"pri_01h8xce2x86dt3sfhkjqbpde65"`)<br>- **PayPal**: Plan ID (e.g., `"P-1234567890"`)<br>- **Lemon Squeezy**: Variant ID (e.g., `"67890"`)<br>- **Polar**: Product ID (e.g., `"prod_1234567890"`) |
+| `currency` | `string` | ✅       | ISO 4217 currency code (e.g., `'USD'`, `'EUR'`)                                                                                                                                                                                                                                                                                                   |
+| `email`    | `string` | ❌       | Customer email address (required for some providers)                                                                                                                                                                                                                                                                                              |
+
+**Returns:** `Promise<SubscriptionResult>`
+
+**Example:**
 
 ```typescript
 import { pay } from "@paylayer/core";
 
 // Create a subscription
 const subscription = await pay.subscribe({
-  plan: "pro-monthly",
+  plan: "pro-monthly", // Provider-specific plan identifier
   currency: "USD",
   email: "customer@example.com",
 });
 
 console.log("Subscription ID:", subscription.id);
-
-// Pause a subscription
-await pay.pause(subscription.id);
-
-// Resume a subscription
-await pay.resume(subscription.id);
-
-// Cancel a subscription
-await pay.cancel(subscription.id);
+console.log("Status:", subscription.status); // "active" | "paused" | "cancelled" | "past_due"
 ```
 
+**Return Type:**
+
+```typescript
+interface SubscriptionResult {
+  id: string; // Subscription ID from provider
+  status: "active" | "paused" | "cancelled" | "past_due";
+  plan: string; // Plan identifier used
+  currency: string; // ISO 4217 currency code
+  provider: string; // Provider name
+  email?: string; // Customer email if provided
+}
+```
+
+#### `pay.cancel(subscriptionId)`
+
+Cancels an active subscription. The subscription will remain active until the end of the current billing period.
+
+**Parameters:**
+
+| Parameter        | Type     | Required | Description                   |
+| ---------------- | -------- | -------- | ----------------------------- |
+| `subscriptionId` | `string` | ✅       | Subscription ID from provider |
+
+**Returns:** `Promise<SubscriptionResult>`
+
+**Example:**
+
+```typescript
+await pay.cancel("sub_1234567890");
+```
+
+#### `pay.pause(subscriptionId)`
+
+Pauses an active subscription. Billing is paused, but the subscription remains in your system.
+
+**Parameters:**
+
+| Parameter        | Type     | Required | Description                   |
+| ---------------- | -------- | -------- | ----------------------------- |
+| `subscriptionId` | `string` | ✅       | Subscription ID from provider |
+
+**Returns:** `Promise<SubscriptionResult>`
+
+**Example:**
+
+```typescript
+await pay.pause("sub_1234567890");
+```
+
+#### `pay.resume(subscriptionId)`
+
+Resumes a paused subscription. Billing will resume immediately.
+
+**Parameters:**
+
+| Parameter        | Type     | Required | Description                   |
+| ---------------- | -------- | -------- | ----------------------------- |
+| `subscriptionId` | `string` | ✅       | Subscription ID from provider |
+
+**Returns:** `Promise<SubscriptionResult>`
+
+**Example:**
+
+```typescript
+await pay.resume("sub_1234567890");
+```
+
+---
+
 ### Billing Portal
+
+#### `pay.portal(input)`
+
+Generates a billing portal URL where customers can manage their subscriptions, update payment methods, and view billing history. This is a self-service portal provided by the payment provider.
+
+**Parameters:**
+
+| Parameter | Type     | Required | Description            |
+| --------- | -------- | -------- | ---------------------- |
+| `email`   | `string` | ✅       | Customer email address |
+
+**Returns:** `Promise<string>` - Billing portal URL
+
+**Example:**
 
 ```typescript
 import { pay } from "@paylayer/core";
@@ -121,141 +578,98 @@ const portalUrl = await pay.portal({
   email: "customer@example.com",
 });
 
-// Redirect user to portalUrl
+// Redirect user to the portal
+// In Express.js:
+res.redirect(portalUrl);
+
+// In Next.js:
+import { redirect } from "next/navigation";
+redirect(portalUrl);
 ```
 
+**What customers can do in the portal:**
+
+- Update payment methods
+- View billing history
+- Cancel subscriptions
+- Update billing information
+- Download invoices
+
+---
+
 ### Webhooks
+
+Webhooks allow payment providers to notify your application about payment events in real-time. PayLayer normalizes all webhook events to a consistent format, so you can handle events the same way regardless of provider.
+
+#### Setting Up Webhooks
+
+1. **Register event handlers** before processing webhook requests:
 
 ```typescript
 import { pay } from "@paylayer/core";
 
-// Register event handlers
+// Handle successful payments
 pay.onPaymentSuccess((event) => {
   console.log("Payment succeeded:", event);
-  // Update your database, send emails, etc.
+  // Update your database, send confirmation emails, etc.
+  // event contains: type, amount, currency, email, provider, paymentId, etc.
 });
 
+// Handle failed payments
 pay.onPaymentFailed((event) => {
   console.log("Payment failed:", event);
+  // Notify customer, log for review, etc.
 });
 
+// Handle subscription creation
 pay.onSubscriptionCreated((event) => {
   console.log("Subscription created:", event);
+  // Activate user's premium features, send welcome email, etc.
 });
 
+// Handle subscription cancellation
 pay.onSubscriptionCancelled((event) => {
   console.log("Subscription cancelled:", event);
+  // Deactivate premium features, send cancellation email, etc.
 });
+```
 
-// Handle webhook requests (Express.js example)
+2. **Create a webhook endpoint** in your application:
+
+```typescript
+// Express.js example
 import express from "express";
+import { pay } from "@paylayer/core";
 
 const app = express();
 app.use(express.json());
 
 app.post("/webhooks/paylayer", async (req, res) => {
-  const result = await pay.webhook(req);
-  res.status(result.status).json(result.body);
+  try {
+    // Process webhook and verify signature
+    const result = await pay.webhook(req);
+
+    // Return appropriate status
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error("Webhook error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 ```
 
----
+3. **Configure webhook URL in provider dashboard:**
+   - **Stripe**: [Dashboard → Webhooks](https://dashboard.stripe.com/webhooks) → Add endpoint → `https://yourdomain.com/webhooks/paylayer`
+   - **Paddle**: [Dashboard → Notifications](https://vendors.paddle.com/) → Webhooks → Add endpoint
+   - **PayPal**: [Developer Dashboard](https://developer.paypal.com/dashboard/) → Webhooks → Add webhook
+   - **Lemon Squeezy**: [Dashboard → Webhooks](https://app.lemonsqueezy.com/settings/webhooks) → Add webhook
+   - **Polar**: [Dashboard → Settings → Webhooks](https://polar.sh/dashboard) → Add webhook
 
-## 📚 API Reference
+#### Webhook Handlers
 
-### `pay.charge(input)`
+##### `pay.onPaymentSuccess(handler)`
 
-Creates a one-time payment charge.
-
-**Parameters:**
-
-| Parameter  | Type     | Required | Description                                 |
-| ---------- | -------- | -------- | ------------------------------------------- |
-| `amount`   | `number` | ✅       | Payment amount                              |
-| `currency` | `string` | ✅       | ISO 4217 currency code (e.g., 'USD', 'EUR') |
-| `email`    | `string` | ❌       | Customer email                              |
-
-**Returns:** `Promise<ChargeResult>`
-
----
-
-### `pay.subscribe(input)`
-
-Creates a subscription.
-
-**Parameters:**
-
-| Parameter  | Type     | Required | Description                                                                                                                                  |
-| ---------- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plan`     | `string` | ✅       | Subscription plan identifier (provider-specific: Stripe lookup_key, Paddle/Lemon Squeezy price/variant ID, PayPal plan ID, Polar product ID) |
-| `currency` | `string` | ✅       | ISO 4217 currency code                                                                                                                       |
-| `email`    | `string` | ❌       | Customer email (required for some providers)                                                                                                 |
-
-**Returns:** `Promise<SubscriptionResult>`
-
----
-
-### `pay.cancel(subscriptionId)`
-
-Cancels a subscription.
-
-**Parameters:**
-
-| Parameter        | Type     | Required | Description     |
-| ---------------- | -------- | -------- | --------------- |
-| `subscriptionId` | `string` | ✅       | Subscription ID |
-
-**Returns:** `Promise<SubscriptionResult>`
-
----
-
-### `pay.pause(subscriptionId)`
-
-Pauses a subscription.
-
-**Parameters:**
-
-| Parameter        | Type     | Required | Description     |
-| ---------------- | -------- | -------- | --------------- |
-| `subscriptionId` | `string` | ✅       | Subscription ID |
-
-**Returns:** `Promise<SubscriptionResult>`
-
----
-
-### `pay.resume(subscriptionId)`
-
-Resumes a paused subscription.
-
-**Parameters:**
-
-| Parameter        | Type     | Required | Description     |
-| ---------------- | -------- | -------- | --------------- |
-| `subscriptionId` | `string` | ✅       | Subscription ID |
-
-**Returns:** `Promise<SubscriptionResult>`
-
----
-
-### `pay.portal(input)`
-
-Generates a billing portal URL for customer self-service.
-
-**Parameters:**
-
-| Parameter | Type     | Required | Description    |
-| --------- | -------- | -------- | -------------- |
-| `email`   | `string` | ✅       | Customer email |
-
-**Returns:** `Promise<string>` - Billing portal URL
-
----
-
-### Webhook Handlers
-
-#### `pay.onPaymentSuccess(handler)`
-
-Registers a handler for payment success events.
+Registers a handler for successful payment events.
 
 **Parameters:**
 
@@ -263,11 +677,22 @@ Registers a handler for payment success events.
 | --------- | ---------- | -------- | --------------------------------------------------- |
 | `handler` | `function` | ✅       | `(event: NormalizedEvent) => void \| Promise<void>` |
 
----
+**Example:**
 
-#### `pay.onPaymentFailed(handler)`
+```typescript
+pay.onPaymentSuccess(async (event) => {
+  await updateDatabase({
+    paymentId: event.paymentId,
+    amount: event.amount,
+    status: "succeeded",
+  });
+  await sendConfirmationEmail(event.email);
+});
+```
 
-Registers a handler for payment failure events.
+##### `pay.onPaymentFailed(handler)`
+
+Registers a handler for failed payment events.
 
 **Parameters:**
 
@@ -275,9 +700,7 @@ Registers a handler for payment failure events.
 | --------- | ---------- | -------- | --------------------------------------------------- |
 | `handler` | `function` | ✅       | `(event: NormalizedEvent) => void \| Promise<void>` |
 
----
-
-#### `pay.onSubscriptionCreated(handler)`
+##### `pay.onSubscriptionCreated(handler)`
 
 Registers a handler for subscription creation events.
 
@@ -287,9 +710,7 @@ Registers a handler for subscription creation events.
 | --------- | ---------- | -------- | --------------------------------------------------- |
 | `handler` | `function` | ✅       | `(event: NormalizedEvent) => void \| Promise<void>` |
 
----
-
-#### `pay.onSubscriptionCancelled(handler)`
+##### `pay.onSubscriptionCancelled(handler)`
 
 Registers a handler for subscription cancellation events.
 
@@ -299,11 +720,14 @@ Registers a handler for subscription cancellation events.
 | --------- | ---------- | -------- | --------------------------------------------------- |
 | `handler` | `function` | ✅       | `(event: NormalizedEvent) => void \| Promise<void>` |
 
----
+#### `pay.webhook(req)`
 
-### `pay.webhook(req)`
+Processes a webhook request from a payment provider. This method:
 
-Processes a webhook request from a payment provider. Automatically verifies webhook signatures using provider-specific verification methods.
+- Verifies the webhook signature using provider-specific methods
+- Parses the webhook payload
+- Triggers the appropriate event handlers
+- Returns a response indicating success or failure
 
 **Parameters:**
 
@@ -313,30 +737,65 @@ Processes a webhook request from a payment provider. Automatically verifies webh
 
 **Returns:** `Promise<{ status: number; body: { received: boolean } }>`
 
-> **Note:** Always returns `200` if webhook is accepted and signature is valid. Returns `401` if signature verification fails.
+**Status Codes:**
+
+- `200` - Webhook processed successfully and signature verified
+- `401` - Signature verification failed (webhook rejected)
+
+**Example:**
+
+```typescript
+app.post("/webhooks/paylayer", async (req, res) => {
+  const result = await pay.webhook(req);
+  res.status(result.status).json(result.body);
+});
+```
+
+**Security Notes:**
+
+- All webhook signatures are automatically verified
+- Invalid signatures result in a `401` response
+- Constant-time comparison is used to prevent timing attacks
+- Never process webhooks without signature verification
 
 ---
 
 ## 📨 Event Object Shape
 
-All webhook events are normalized to a consistent shape:
+All webhook events are normalized to a consistent shape, regardless of provider:
 
 ```typescript
 interface NormalizedEvent {
   type:
-    | "payment.success"
-    | "payment.failed"
-    | "subscription.created"
-    | "subscription.cancelled"
-    | "subscription.paused"
-    | "subscription.resumed";
-  amount?: number;
-  currency?: string;
-  email?: string;
-  provider: string;
-  subscriptionId?: string;
-  paymentId?: string;
-  metadata?: Record<string, unknown>;
+    | "payment.success" // Payment completed successfully
+    | "payment.failed" // Payment failed or was declined
+    | "subscription.created" // New subscription created
+    | "subscription.cancelled" // Subscription cancelled
+    | "subscription.paused" // Subscription paused
+    | "subscription.resumed"; // Subscription resumed from pause
+  amount?: number; // Payment amount (if applicable)
+  currency?: string; // ISO 4217 currency code (if applicable)
+  email?: string; // Customer email address
+  provider: string; // Provider name: "stripe", "paddle", "paypal", etc.
+  subscriptionId?: string; // Subscription ID (for subscription events)
+  paymentId?: string; // Payment ID (for payment events)
+  metadata?: Record<string, unknown>; // Additional provider-specific data
+}
+```
+
+**Example Event:**
+
+```typescript
+{
+  type: "payment.success",
+  amount: 29.99,
+  currency: "USD",
+  email: "customer@example.com",
+  provider: "stripe",
+  paymentId: "pi_1234567890",
+  metadata: {
+    // Provider-specific additional data
+  }
 }
 ```
 
@@ -358,139 +817,94 @@ All providers are fully implemented with proper webhook verification, error hand
 
 ---
 
-## ⚙️ Provider Configuration
+## 🔧 Provider Setup Guides
 
-### 🔵 Stripe
+### Stripe Setup
 
-**Required Environment Variables:**
+1. **Create a Stripe account** at [stripe.com](https://stripe.com)
+2. **Get your API keys:**
+   - Go to [Stripe Dashboard → API Keys](https://dashboard.stripe.com/apikeys)
+   - Copy your **Secret key** (starts with `sk_test_` for test mode or `sk_live_` for production)
+3. **Create prices with lookup keys:**
+   - Go to [Stripe Dashboard → Products](https://dashboard.stripe.com/products)
+   - Create a product and price
+   - Set a `lookup_key` (e.g., `"pro-monthly"`) in the price settings
+   - Use this `lookup_key` as the `plan` parameter in `pay.subscribe()`
+4. **Set up webhooks:**
+   - Go to [Stripe Dashboard → Webhooks](https://dashboard.stripe.com/webhooks)
+   - Click "Add endpoint"
+   - Enter your webhook URL: `https://yourdomain.com/webhooks/paylayer`
+   - Select events: `payment_intent.succeeded`, `payment_intent.payment_failed`, `customer.subscription.created`, `customer.subscription.deleted`, etc.
+   - Copy the **Signing secret** (starts with `whsec_`)
 
-- `STRIPE_SECRET_KEY` - Your Stripe secret key
-- `STRIPE_WEBHOOK_SECRET` - Webhook signing secret (for webhook verification)
+### Paddle Setup
 
-**Optional Environment Variables:**
+1. **Create a Paddle account** at [paddle.com](https://paddle.com)
+2. **Get your API key:**
+   - Go to [Paddle Dashboard → Developer Tools → Authentication](https://vendors.paddle.com/authentication)
+   - Create an API key and copy it
+3. **Create prices:**
+   - Go to [Paddle Dashboard → Catalog](https://vendors.paddle.com/catalog)
+   - Create products and prices
+   - Copy the **Price ID** (starts with `pri_`)
+   - Use this Price ID as the `plan` parameter in `pay.subscribe()`
+4. **Set up webhooks:**
+   - Go to [Paddle Dashboard → Developer Tools → Notifications](https://vendors.paddle.com/notifications)
+   - Add a webhook endpoint: `https://yourdomain.com/webhooks/paylayer`
+   - Copy the **Signing secret**
 
-- `STRIPE_PORTAL_RETURN_URL` - Return URL for billing portal (defaults to 'https://app.example.com')
+### PayPal Setup
 
-> **Note:** Stripe automatically detects test vs production mode from the API key prefix (`sk_test_` vs `sk_live_`). The `PAYLAYER_ENVIRONMENT` variable can be used to validate that the environment mode matches the API key type (warnings will be shown if there's a mismatch).
+1. **Create a PayPal Developer account** at [developer.paypal.com](https://developer.paypal.com)
+2. **Create an app:**
+   - Go to [PayPal Developer Dashboard](https://developer.paypal.com/dashboard/)
+   - Click "Create App"
+   - Copy your **Client ID** and **Secret**
+3. **Create billing plans:**
+   - Go to [PayPal Dashboard → Billing](https://www.paypal.com/billing)
+   - Create a billing plan
+   - Copy the **Plan ID** (starts with `P-`)
+   - Use this Plan ID as the `plan` parameter in `pay.subscribe()`
+4. **Set up webhooks:**
+   - Go to [PayPal Developer Dashboard → Webhooks](https://developer.paypal.com/dashboard/)
+   - Add a webhook URL: `https://yourdomain.com/webhooks/paylayer`
+   - Copy the **Signing secret**
 
-**Setup:**
+### Lemon Squeezy Setup
 
-1. Create prices in Stripe dashboard with `lookup_key` set to your plan identifiers
-2. Use the `lookup_key` as the `plan` parameter in `pay.subscribe()`
+1. **Create a Lemon Squeezy account** at [lemonsqueezy.com](https://lemonsqueezy.com)
+2. **Create a store:**
+   - Go to [Lemon Squeezy Dashboard → Stores](https://app.lemonsqueezy.com/stores)
+   - Create or select a store
+   - Copy your **Store ID**
+3. **Get your API key:**
+   - Go to [Lemon Squeezy Dashboard → Settings → API](https://app.lemonsqueezy.com/settings/api)
+   - Create an API key and copy it
+4. **Create products and variants:**
+   - Go to [Lemon Squeezy Dashboard → Products](https://app.lemonsqueezy.com/products)
+   - Create a product and variant
+   - Copy the **Variant ID**
+   - Use this Variant ID as the `plan` parameter in `pay.subscribe()`
+5. **Set up webhooks:**
+   - Go to [Lemon Squeezy Dashboard → Settings → Webhooks](https://app.lemonsqueezy.com/settings/webhooks)
+   - Add a webhook URL: `https://yourdomain.com/webhooks/paylayer`
+   - Copy the **Signing secret**
 
----
+### Polar.sh Setup
 
-### 🟢 Paddle
-
-**Required Environment Variables:**
-
-- `PADDLE_API_KEY` - Your Paddle API key
-- `PADDLE_WEBHOOK_SECRET` - Webhook signing secret
-- `PADDLE_DEFAULT_PRICE_ID` - Default price ID for one-time charges
-
-**Optional Environment Variables:**
-
-- `PADDLE_BASE_URL` - API base URL (defaults to production)
-- `PADDLE_SANDBOX` - Set to "true" for sandbox environment (deprecated: use `PAYLAYER_ENVIRONMENT=sandbox` instead)
-- `PADDLE_PORTAL_BASE_URL` - Customer portal base URL
-
-> **Note:** The `PAYLAYER_ENVIRONMENT` variable can be used instead of `PADDLE_SANDBOX` to control sandbox mode for all providers at once.
-
-**Setup:**
-
-1. Create prices in Paddle dashboard
-2. Use price IDs as the `plan` parameter in `pay.subscribe()`
-
----
-
-### 🟡 PayPal
-
-**Required Environment Variables:**
-
-- `PAYPAL_CLIENT_ID` - Your PayPal client ID
-- `PAYPAL_CLIENT_SECRET` - Your PayPal client secret
-- `PAYPAL_WEBHOOK_SECRET` - Webhook signing secret
-
-**Optional Environment Variables:**
-
-- `PAYPAL_BASE_URL` - API base URL (defaults to production)
-- `PAYPAL_SANDBOX` - Set to "true" for sandbox environment (deprecated: use `PAYLAYER_ENVIRONMENT=sandbox` instead)
-- `PAYPAL_BRAND_NAME` - Brand name for checkout
-- `PAYPAL_RETURN_URL` - Return URL after payment
-- `PAYPAL_CANCEL_URL` - Cancel URL
-- `PAYPAL_PORTAL_BASE_URL` - Customer portal base URL
-
-> **Note:** The `PAYLAYER_ENVIRONMENT` variable can be used instead of `PAYPAL_SANDBOX` to control sandbox mode for all providers at once.
-
-**Setup:**
-
-1. Create billing plans in PayPal dashboard
-2. Use plan IDs as the `plan` parameter in `pay.subscribe()`
-
----
-
-### 🟣 Lemon Squeezy
-
-**Required Environment Variables:**
-
-- `LEMONSQUEEZY_API_KEY` - Your Lemon Squeezy API key
-- `LEMONSQUEEZY_WEBHOOK_SECRET` - Webhook signing secret
-- `LEMONSQUEEZY_STORE_ID` - Your store ID
-- `LEMONSQUEEZY_DEFAULT_VARIANT_ID` - Default variant ID for one-time charges
-
-**Optional Environment Variables:**
-
-- `LEMONSQUEEZY_BASE_URL` - API base URL (defaults to production)
-- `LEMONSQUEEZY_TEST_MODE` - Set to "true" for test mode (deprecated: use `PAYLAYER_ENVIRONMENT=sandbox` instead)
-- `LEMONSQUEEZY_PORTAL_BASE_URL` - Customer portal base URL
-
-> **Note:** The `PAYLAYER_ENVIRONMENT` variable can be used instead of `LEMONSQUEEZY_TEST_MODE` to control test mode for all providers at once.
-
-**Setup:**
-
-1. Create products and variants in Lemon Squeezy dashboard
-2. Use variant IDs as the `plan` parameter in `pay.subscribe()`
-
----
-
-### 🟠 Polar.sh
-
-**Required Environment Variables:**
-
-- `POLAR_OAT` or `POLAR_ACCESS_TOKEN` - Your Polar Organization Access Token (OAT)
-- `POLAR_WEBHOOK_SECRET` - Webhook signing secret (may be base64 encoded)
-- `POLAR_DEFAULT_PRODUCT_ID` - Default product ID for one-time charges
-
-**Optional Environment Variables:**
-
-- `POLAR_BASE_URL` - API base URL (defaults to `https://api.polar.sh/v1`)
-- `POLAR_SANDBOX` - Set to `"true"` to use sandbox environment (`https://sandbox-api.polar.sh/v1`) (deprecated: use `PAYLAYER_ENVIRONMENT=sandbox` instead)
-- `POLAR_SUCCESS_URL` - Success URL after payment (defaults to `https://app.example.com/success`)
-
-> **Note:** The `PAYLAYER_ENVIRONMENT` variable can be used instead of `POLAR_SANDBOX` to control sandbox mode for all providers at once.
-
-**Setup:**
-
-1. Create an Organization Access Token (OAT) in your Polar dashboard
-2. Create products with subscription prices in Polar dashboard
-3. Use the product ID as the `plan` parameter in `pay.subscribe()`
-4. For one-time charges, set `POLAR_DEFAULT_PRODUCT_ID` to a product ID
-5. Configure webhook endpoint in Polar dashboard and set `POLAR_WEBHOOK_SECRET`
-
----
-
-## 🔐 Environment Variables
-
-### Core Configuration
-
-| Variable               | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PAYLAYER_PROVIDER`    | ✅       | Payment provider identifier: `'stripe'`, `'paddle'`, `'paypal'`, `'lemonsqueezy'`, `'polar'`, or `'mock'`                                                                                                                                                                                                                                                                                                                                                               |
-| `PAYLAYER_ENVIRONMENT` | ❌       | Unified environment mode for all providers. Accepts: `"sandbox"`, `"test"`, `"production"`, or `"live"` (case-insensitive). Defaults to `"production"` if not set. This variable applies to all providers and replaces provider-specific sandbox/test mode variables. For backward compatibility, provider-specific variables (`PADDLE_SANDBOX`, `PAYPAL_SANDBOX`, `LEMONSQUEEZY_TEST_MODE`, `POLAR_SANDBOX`) are still supported if `PAYLAYER_ENVIRONMENT` is not set. |
-
-### Provider-Specific
-
-See [Provider Configuration](#-provider-configuration) section above for provider-specific environment variables.
+1. **Create a Polar account** at [polar.sh](https://polar.sh)
+2. **Create an Organization Access Token (OAT):**
+   - Go to [Polar Dashboard → Settings → Access Tokens](https://polar.sh/dashboard/settings)
+   - Create an OAT and copy it
+3. **Create products:**
+   - Go to [Polar Dashboard → Products](https://polar.sh/dashboard/products)
+   - Create a product with subscription prices
+   - Copy the **Product ID**
+   - Use this Product ID as the `plan` parameter in `pay.subscribe()`
+4. **Set up webhooks:**
+   - Go to [Polar Dashboard → Settings → Webhooks](https://polar.sh/dashboard/settings/webhooks)
+   - Add a webhook URL: `https://yourdomain.com/webhooks/paylayer`
+   - Copy the **Signing secret**
 
 ---
 
@@ -505,30 +919,74 @@ import type {
   SubscriptionResult,
   NormalizedEvent,
 } from "@paylayer/core";
+
+// All methods are fully typed
+const result: ChargeResult = await pay.charge({
+  amount: 29.99,
+  currency: "USD",
+  email: "customer@example.com",
+});
 ```
 
 ---
 
 ## 🔒 Security
 
-- ✅ All webhook signatures are verified using provider-specific methods (HMAC SHA256 for most providers)
-- ✅ Constant-time comparison is used for signature verification to prevent timing attacks
-- ✅ No sensitive data is logged or exposed
-- ✅ All API keys must be provided via environment variables
+- ✅ **Webhook Signature Verification** - All webhook signatures are verified using provider-specific methods (HMAC SHA256 for most providers)
+- ✅ **Timing Attack Prevention** - Constant-time comparison is used for signature verification to prevent timing attacks
+- ✅ **No Sensitive Data Logging** - No sensitive data (API keys, payment details) is logged or exposed
+- ✅ **Environment Variable Security** - All API keys must be provided via environment variables (never hardcode credentials)
+- ✅ **Production Safety** - Defaults to production mode for safety (explicitly set sandbox mode for testing)
+
+**Best Practices:**
+
+- Never commit `.env` files to version control
+- Use different API keys for development and production
+- Rotate API keys regularly
+- Monitor webhook endpoints for suspicious activity
+- Use HTTPS for all webhook endpoints
 
 ---
 
 ## ⚠️ Error Handling
 
-The SDK provides clear error messages for:
+The SDK provides clear, actionable error messages for common issues:
 
-- Missing required environment variables
-- Missing required parameters
-- Invalid API responses
-- Webhook signature verification failures
-- Provider-specific errors
+### Missing Environment Variables
 
-All errors include context to help with debugging.
+```typescript
+// Error: "STRIPE_SECRET_KEY environment variable is required for Stripe provider"
+// Solution: Add STRIPE_SECRET_KEY to your .env file
+```
+
+### Missing Required Parameters
+
+```typescript
+// Error: "amount is required"
+// Solution: Provide the amount parameter in your charge() call
+```
+
+### Invalid API Responses
+
+```typescript
+// Error: "Stripe API error: 400 - { message: 'Invalid request' }"
+// Solution: Check your request parameters and API key validity
+```
+
+### Webhook Signature Verification Failures
+
+```typescript
+// Returns 401 status if signature verification fails
+// Solution: Verify your webhook secret matches the one in your provider dashboard
+```
+
+### Provider-Specific Errors
+
+All errors include context to help with debugging, including:
+
+- Which provider caused the error
+- What operation was being performed
+- The original error message from the provider
 
 ---
 
