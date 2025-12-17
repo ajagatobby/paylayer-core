@@ -8,16 +8,22 @@ import type {
   ChargeResult,
   SubscribeInput,
   SubscriptionResult,
+  CheckoutInput,
+  CheckoutResult,
 } from "../types.js";
 
 export class MockProvider implements PaymentProvider {
   readonly name = "mock";
 
   async charge(input: ChargeInput): Promise<ChargeResult> {
+    const baseUrl =
+      process.env.PAYLAYER_CHECKOUT_BASE_URL || "https://checkout.paylayer.com";
+    const sessionId = `ch_mock_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     return {
-      id: `ch_mock_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+      id: sessionId,
+      url: `${baseUrl}/payment/${sessionId}?provider=${this.name}${input.productId ? `&productId=${input.productId}` : ""}`,
       status: "pending",
-      amount: input.amount,
+      amount: input.amount || 0,
       currency: input.currency,
       provider: this.name,
       email: input.email,
@@ -25,9 +31,13 @@ export class MockProvider implements PaymentProvider {
   }
 
   async subscribe(input: SubscribeInput): Promise<SubscriptionResult> {
+    const baseUrl =
+      process.env.PAYLAYER_CHECKOUT_BASE_URL || "https://checkout.paylayer.com";
+    const sessionId = `sub_mock_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     return {
-      id: `sub_mock_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-      status: "active",
+      id: sessionId,
+      url: `${baseUrl}/subscription/${sessionId}?provider=${this.name}`,
+      status: "pending",
       plan: input.plan,
       currency: input.currency,
       provider: this.name,
@@ -69,6 +79,17 @@ export class MockProvider implements PaymentProvider {
     const baseUrl =
       process.env.PAYLAYER_PORTAL_BASE_URL || "https://portal.paylayer.com";
     return `${baseUrl}/customer/${encodeURIComponent(email)}?provider=${this.name}`;
+  }
+
+  async checkout(input: CheckoutInput): Promise<CheckoutResult> {
+    const baseUrl =
+      process.env.PAYLAYER_CHECKOUT_BASE_URL || "https://checkout.paylayer.com";
+    const sessionId = `checkout_mock_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    return {
+      url: `${baseUrl}/session/${sessionId}?provider=${this.name}`,
+      id: sessionId,
+      provider: this.name,
+    };
   }
 
   verifyWebhook(): boolean {

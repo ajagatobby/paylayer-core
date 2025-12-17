@@ -26,6 +26,7 @@ interface PolarCustomerList {
 interface PolarProduct {
   id: string;
   name: string;
+  recurring_interval?: string | null; // null = one-time product, set value = subscription product
   prices: Array<{
     id: string;
     amount_type: string;
@@ -40,6 +41,11 @@ interface PolarCheckout {
   id: string;
   status: string;
   url: string;
+  products?: Array<{
+    id: string;
+    is_recurring?: boolean;
+    recurring_interval?: string | null;
+  }>;
 }
 
 interface PolarSubscription {
@@ -155,36 +161,165 @@ export class PolarProvider implements PaymentProvider {
   }
 
   async charge(input: ChargeInput): Promise<ChargeResult> {
-    // Polar uses checkout sessions for one-time payments
-    const productId = process.env.POLAR_DEFAULT_PRODUCT_ID;
-    if (!productId) {
+    // Polar requires a product ID to create checkouts.
+    // Only productId is supported - amount and priceId are not supported.
+    //
+    // To create a one-time product in Polar dashboard:
+    //   1. Go to Products > Create Product
+    //   2. Name it "One-Time Payment" (or any name)
+    //   3. Leave recurring_interval unset (or set to null) - this makes it one-time
+    //   4. Add a price for your currency
+    //   5. Copy the Product ID and provide it in the charge() call
+
+    // productId is required
+    if (!input.productId) {
       throw new Error(
-        "POLAR_DEFAULT_PRODUCT_ID is required for charges. Create a product in Polar dashboard first."
+        "productId is required for Polar charges. " +
+          "Please create a one-time product in Polar dashboard and provide the productId in the charge() input."
       );
     }
 
-    // Polar API requires products as an array
-    const response = await this.request<PolarCheckout>("POST", "/checkouts", {
-      products: [productId], // Array of product IDs
-      success_url:
-        process.env.POLAR_SUCCESS_URL || "https://app.example.com/success",
-      customer_email: input.email,
+    // Reject amount and priceId - only productId is supported
+    if (input.amount !== undefined) {
+      throw new Error(
+        "amount is not supported for Polar charges. " +
+          "Only productId is supported. The product must have a price configured in Polar dashboard."
+      );
+    }
+
+    if (input.priceId !== undefined) {
+      throw new Error(
+        "priceId is not supported for Polar charges. " +
+          "Only productId is supported. The product must have a price configured in Polar dashboard."
+      );
+    }
+
+    const productId = input.productId;
+
+    // Prioritize input URLs over environment variables
+    const successUrl =
+      input.successUrl ??
+      process.env.PAYLAYER_SUCCESS_URL ??
+      process.env.POLAR_SUCCESS_URL ??
+      "https://app.example.com/success";
+
+    // Get the product to find a matching price
+    const product = await this.request<PolarProduct>(
+      "GET",
+      `/products/${productId}`
+    );
+
+    // Verify it's a one-time product
+    const isSubscriptionProduct =
+      product.recurring_interval !== null &&
+      product.recurring_interval !== undefined;
+
+    if (isSubscriptionProduct) {
+      throw new Error(
+        `Product ${productId} is a subscription product (recurring_interval: ${product.recurring_interval}). ` +
+          `Only one-time products (recurring_interval: null) can be used for charges. ` +
+          `Please use a one-time product or use pay.subscribe() for subscriptions.`
+      );
+    }
+
+    // Find a one-time price that matches the currency
+    const oneTimePrice = product.prices.find(
+      (price) =>
+        !price.recurring_interval &&
+        !price.recurring_interval_count &&
+        price.price_currency.toLowerCase() === input.currency.toLowerCase()
+    );
+
+    if (!oneTimePrice) {
+      throw new Error(
+        `No one-time price found for product ${productId} with currency ${input.currency}. ` +
+          `Please ensure the product has a one-time price configured for this currency in Polar dashboard.`
+      );
+    }
+
+    // Use product_id + product_price_id format for one-time payment
+    const checkoutPayload: Record<string, unknown> = {
+      product_id: productId,
+      product_price_id: oneTimePrice.id,
+      success_url: successUrl,
       metadata: {
         paylayer_provider: this.name,
-        amount: input.amount.toString(),
         currency: input.currency,
       },
-    });
+    };
+
+    // Only include email if provided and not a test/example domain
+    // Polar validates email domains strictly, so test@example.com will fail validation
+    // Skip email for test domains to avoid validation errors
+    if (
+      input.email &&
+      !input.email.includes("@example.com") &&
+      !input.email.includes("@test.")
+    ) {
+      // Use snake_case for API consistency
+      checkoutPayload.customer_email = input.email;
+    }
+
+    const response = await this.request<PolarCheckout>(
+      "POST",
+      "/checkouts",
+      checkoutPayload
+    );
+
+    // Fetch full checkout details to verify it's actually one-time
+    // This helps detect if Polar ignored our one-time settings
+    try {
+      const checkoutDetails = await this.request<PolarCheckout>(
+        "GET",
+        `/checkouts/${response.id}`
+      );
+
+      if (checkoutDetails.products && checkoutDetails.products.length > 0) {
+        const product = checkoutDetails.products[0];
+        const isRecurring =
+          product.is_recurring === true ||
+          (product.recurring_interval !== null &&
+            product.recurring_interval !== undefined);
+
+        if (isRecurring) {
+          console.error(
+            `❌ ERROR: Checkout created but is RECURRING (interval: ${product.recurring_interval || "unknown"}, is_recurring: ${product.is_recurring}). ` +
+              `Polar ignored ad-hoc pricing one-time settings because the product is a subscription product. ` +
+              `\n` +
+              `SOLUTION: Create a one-time product in Polar dashboard:\n` +
+              `  1. Go to Products > Create Product\n` +
+              `  2. Set recurring_interval to null (leave it unset)\n` +
+              `  3. Add a price for your currency\n` +
+              `  4. Copy the Product ID and provide it in the charge() call\n` +
+              `\n` +
+              `Current product ${productId} is a subscription product and cannot be used for one-time payments.`
+          );
+        } else {
+          console.log(
+            `✅ Checkout verified as ONE-TIME payment (recurring_interval: ${product.recurring_interval}, is_recurring: ${product.is_recurring})`
+          );
+        }
+      }
+    } catch (verifyError) {
+      // If verification fails, log but don't fail the request
+      console.warn(
+        `⚠️  Could not verify checkout type: ${verifyError instanceof Error ? verifyError.message : "Unknown error"}`
+      );
+    }
+
+    // Get amount from the price (convert from smallest currency unit to regular amount)
+    const amount = oneTimePrice.price_amount / 100;
 
     return {
       id: response.id,
+      url: response.url,
       status:
         response.status === "completed"
           ? "succeeded"
           : response.status === "pending"
             ? "pending"
             : "pending",
-      amount: input.amount,
+      amount,
       currency: input.currency,
       provider: this.name,
       email: input.email,
@@ -192,64 +327,87 @@ export class PolarProvider implements PaymentProvider {
   }
 
   async subscribe(input: SubscribeInput): Promise<SubscriptionResult> {
+    // Polar requires paid subscriptions to be created via checkout sessions, not directly
+    // The subscription will be created automatically when the customer completes checkout
+
+    // Polar validates email domains strictly
     if (!input.email) {
       throw new Error("Email is required for Polar subscriptions");
     }
 
-    // Polar subscriptions require: customer_id, product_id, price_id, recurring_interval, recurring_interval_count
-    // The plan should be a product ID - we need to get the product to find a subscription price
+    // Skip email validation errors for test domains
+    if (
+      input.email.includes("@example.com") ||
+      input.email.includes("@test.")
+    ) {
+      throw new Error(
+        "Polar API validates email domains. Please use a real email address (not @example.com or @test.*)"
+      );
+    }
 
-    // 1. Find or create customer
-    const customerId = await this.findOrCreateCustomer(input.email);
-
-    // 2. Get product details to find subscription price
+    // The plan should be a product ID - verify it's a subscription product
     const product = await this.request<PolarProduct>(
       "GET",
       `/products/${input.plan}`
     );
 
-    // Find a subscription price (recurring price)
-    const subscriptionPrice = product.prices.find(
-      (price) => price.recurring_interval && price.recurring_interval_count
-    );
+    // Check if product is a subscription product
+    const isSubscriptionProduct =
+      product.recurring_interval !== null &&
+      product.recurring_interval !== undefined;
 
-    if (!subscriptionPrice) {
+    if (!isSubscriptionProduct) {
       throw new Error(
-        `No subscription price found for product ${input.plan}. Please ensure the product has a recurring price configured.`
+        `Product ${input.plan} is not a subscription product (recurring_interval: ${product.recurring_interval}). ` +
+          `For subscriptions, you must use a product with recurring_interval set (day/week/month/year).`
       );
     }
 
-    // 3. Create subscription with all required fields
-    const response = await this.request<PolarSubscription>(
+    // Prioritize input URLs over environment variables
+    const successUrl =
+      input.successUrl ??
+      process.env.PAYLAYER_SUCCESS_URL ??
+      process.env.POLAR_SUCCESS_URL ??
+      "https://app.example.com/success";
+
+    const cancelUrl =
+      input.cancelUrl ??
+      process.env.PAYLAYER_CANCEL_URL ??
+      process.env.POLAR_CANCEL_URL ??
+      "https://app.example.com/cancel";
+
+    // Create checkout session for subscription
+    // Polar will create the subscription automatically when customer completes checkout
+    const checkoutPayload: Record<string, unknown> = {
+      products: [input.plan], // Product ID for subscription
+      success_url: successUrl,
+      return_url: cancelUrl, // Polar uses return_url for cancel
+      metadata: {
+        paylayer_provider: this.name,
+        paylayer_plan: input.plan,
+        currency: input.currency,
+        paylayer_type: "subscription",
+      },
+    };
+
+    // Include customer email
+    checkoutPayload.customer_email = input.email;
+
+    const response = await this.request<PolarCheckout>(
       "POST",
-      "/subscriptions",
-      {
-        customer_id: customerId,
-        product_id: input.plan,
-        price_id: subscriptionPrice.id,
-        recurring_interval: subscriptionPrice.recurring_interval || "month",
-        recurring_interval_count:
-          subscriptionPrice.recurring_interval_count || 1,
-        metadata: {
-          paylayer_provider: this.name,
-          paylayer_plan: input.plan,
-          currency: input.currency,
-        },
-      }
+      "/checkouts",
+      checkoutPayload
     );
 
+    // The subscription will be created after checkout completion
+    // For now, return the checkout URL and a temporary subscription ID
+    // The actual subscription ID will be available via webhook after checkout
     return {
-      id: response.id,
-      status:
-        response.status === "active"
-          ? "active"
-          : response.status === "past_due"
-            ? "past_due"
-            : response.status === "canceled" || response.status === "cancelled"
-              ? "cancelled"
-              : "active",
-      plan: response.product_id || input.plan,
-      currency: response.currency?.toUpperCase() || input.currency,
+      id: response.id, // Checkout ID (subscription will be created after checkout)
+      url: response.url, // Checkout URL for customer to complete subscription
+      status: "pending", // Will be updated via webhook after checkout completion
+      plan: input.plan,
+      currency: input.currency,
       provider: this.name,
       email: input.email,
     };

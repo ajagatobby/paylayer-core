@@ -3,19 +3,29 @@ import type {
   ChargeResult,
   SubscribeInput,
   SubscriptionResult,
+  CheckoutInput,
+  CheckoutResult,
 } from "./types.js";
 import { getProvider } from "./providers/factory.js";
 
 /**
  * Creates a one-time payment charge
  *
- * @param input - Charge parameters (amount, currency, optional email)
+ * @param input - Charge parameters (amount or priceId, currency, optional email)
  * @returns Promise resolving to charge result
  *
  * @example
  * ```ts
+ * // Using amount
  * const result = await pay.charge({
  *   amount: 29.99,
+ *   currency: 'USD',
+ *   email: 'customer@example.com'
+ * });
+ *
+ * // Using price ID
+ * const result = await pay.charge({
+ *   priceId: 'price_1234567890',
  *   currency: 'USD',
  *   email: 'customer@example.com'
  * });
@@ -23,7 +33,12 @@ import { getProvider } from "./providers/factory.js";
  */
 async function charge(input: ChargeInput): Promise<ChargeResult> {
   // Validate required fields
-  if (!input.amount || input.amount <= 0) {
+  // Note: For Polar, only productId is supported (amount and priceId are not supported)
+  // For other providers, either amount or priceId must be provided
+  if (!input.amount && !input.priceId && !input.productId) {
+    throw new Error("Either amount, priceId, or productId must be provided");
+  }
+  if (input.amount && input.amount <= 0) {
     throw new Error("Amount must be greater than 0");
   }
   if (!input.currency) {
@@ -143,6 +158,44 @@ async function portal(input: { email: string }): Promise<string> {
   return provider.portal(input.email);
 }
 
+/**
+ * Creates a checkout session/payment link
+ * Returns a URL that can be opened in a browser to complete payment
+ *
+ * @param input - Checkout parameters (amount or plan, currency, email, URLs)
+ * @returns Promise resolving to checkout result with URL
+ *
+ * @example
+ * ```ts
+ * // One-time payment
+ * const checkout = await pay.checkout({
+ *   amount: 29.99,
+ *   currency: 'USD',
+ *   email: 'customer@example.com',
+ *   successUrl: 'https://myapp.com/success',
+ *   cancelUrl: 'https://myapp.com/cancel'
+ * });
+ * // Redirect user to checkout.url
+ *
+ * // Subscription
+ * const checkout = await pay.checkout({
+ *   plan: 'pro-monthly',
+ *   currency: 'USD',
+ *   email: 'customer@example.com',
+ *   successUrl: 'https://myapp.com/success',
+ *   cancelUrl: 'https://myapp.com/cancel'
+ * });
+ * ```
+ */
+async function checkout(input: CheckoutInput): Promise<CheckoutResult> {
+  if (!input.currency) {
+    throw new Error("Currency is required for checkout");
+  }
+
+  const provider = getProvider();
+  return provider.checkout(input);
+}
+
 export const pay = {
   charge,
   subscribe,
@@ -150,4 +203,5 @@ export const pay = {
   pause,
   resume,
   portal,
+  checkout,
 };

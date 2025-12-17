@@ -300,7 +300,6 @@ Each payment provider requires specific credentials and configuration. Choose yo
 | ----------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `POLAR_OAT` or `POLAR_ACCESS_TOKEN` | Your Polar Organization Access Token (OAT)     | [Polar Dashboard](https://polar.sh/dashboard) → Settings → Access Tokens → Create OAT |
 | `POLAR_WEBHOOK_SECRET`              | Webhook signing secret (may be base64 encoded) | [Polar Dashboard](https://polar.sh/dashboard) → Settings → Webhooks → Signing Secret  |
-| `POLAR_DEFAULT_PRODUCT_ID`          | Default product ID for one-time charges        | [Polar Dashboard](https://polar.sh/dashboard) → Products → Copy Product ID            |
 
 **Optional Variables:**
 
@@ -316,7 +315,7 @@ Each payment provider requires specific credentials and configuration. Choose yo
 2. Create an Organization Access Token (OAT) in your dashboard
 3. Create products with subscription prices in your dashboard
 4. Use the product ID as the `plan` parameter in `pay.subscribe()`
-5. For one-time charges, set `POLAR_DEFAULT_PRODUCT_ID` to a product ID
+5. For one-time charges, provide the `productId` in the `charge()` call
 6. Configure webhook endpoint in Polar dashboard and copy the signing secret
 
 ---
@@ -395,7 +394,6 @@ PAYLAYER_ENVIRONMENT=production
 # Polar credentials
 POLAR_OAT=YOUR_POLAR_OAT_HERE
 POLAR_WEBHOOK_SECRET=YOUR_POLAR_WEBHOOK_SECRET_HERE
-POLAR_DEFAULT_PRODUCT_ID=prod_YOUR_PRODUCT_ID_HERE
 
 # Optional: Success URL
 POLAR_SUCCESS_URL=https://myapp.com/payment/success

@@ -64,40 +64,82 @@ export class LemonSqueezyProvider implements PaymentProvider {
       throw new Error("LEMONSQUEEZY_STORE_ID is required for charges");
     }
 
-    const variantId = process.env.LEMONSQUEEZY_DEFAULT_VARIANT_ID;
-    if (!variantId) {
-      throw new Error(
-        "LEMONSQUEEZY_DEFAULT_VARIANT_ID is required for charges. Create a variant in Lemon Squeezy dashboard first."
-      );
+    let variantId: string;
+
+    if (input.productId) {
+      // Product ID - fetch product and use its first variant
+      const product = (await this.request(
+        "GET",
+        `/v1/products/${input.productId}`
+      )) as {
+        data: {
+          id: string;
+          attributes: {
+            variants?: {
+              data?: Array<{ id: string }>;
+            };
+          };
+        };
+      };
+
+      if (
+        !product.data.attributes.variants ||
+        !product.data.attributes.variants.data ||
+        product.data.attributes.variants.data.length === 0
+      ) {
+        throw new Error(
+          `No variants found for product "${input.productId}". Please ensure the product has at least one variant configured.`
+        );
+      }
+
+      variantId = product.data.attributes.variants.data[0].id;
+    } else {
+      // Prioritize input.priceId over environment variable
+      // In Lemon Squeezy, priceId refers to a variant ID
+      variantId = input.priceId || process.env.LEMONSQUEEZY_DEFAULT_VARIANT_ID;
+      if (!variantId) {
+        throw new Error(
+          "Either productId, priceId must be provided in input or LEMONSQUEEZY_DEFAULT_VARIANT_ID environment variable must be set. Create a variant in Lemon Squeezy dashboard first."
+        );
+      }
     }
 
-    // Convert amount to cents (Lemon Squeezy uses smallest currency unit)
-    const amountInCents = Math.round(input.amount * 100);
+    // Build checkout attributes
+    const checkoutAttributes: Record<string, unknown> = {
+      product_options: {
+        name: "One-time Payment",
+        description: input.amount
+          ? `Payment of ${input.amount} ${input.currency}`
+          : `Payment in ${input.currency}`,
+      },
+      checkout_options: {
+        embed: false,
+        media: false,
+        logo: false,
+      },
+      checkout_data: {
+        email: input.email,
+        custom: {
+          paylayer_provider: this.name,
+        },
+      },
+      expires_at: null,
+      preview: false,
+      test_mode: isSandbox(this.name),
+    };
+
+    // If amount is provided, use custom_price (overrides variant price)
+    // If only priceId is provided, use the variant's default price
+    if (input.amount) {
+      // Convert amount to cents (Lemon Squeezy uses smallest currency unit)
+      const amountInCents = Math.round(input.amount * 100);
+      checkoutAttributes.custom_price = amountInCents;
+    }
 
     const response = (await this.request("POST", "/v1/checkouts", {
       data: {
         type: "checkouts",
-        attributes: {
-          custom_price: amountInCents,
-          product_options: {
-            name: "One-time Payment",
-            description: `Payment of ${input.amount} ${input.currency}`,
-          },
-          checkout_options: {
-            embed: false,
-            media: false,
-            logo: false,
-          },
-          checkout_data: {
-            email: input.email,
-            custom: {
-              paylayer_provider: this.name,
-            },
-          },
-          expires_at: null,
-          preview: false,
-          test_mode: isSandbox(this.name),
-        },
+        attributes: checkoutAttributes,
         relationships: {
           store: {
             data: {
@@ -126,16 +168,18 @@ export class LemonSqueezyProvider implements PaymentProvider {
     // Checkouts are created in pending state until completed
     // Status may not be present in initial response, default to pending
     const checkoutStatus = response.data.attributes.status || "pending";
+    const checkoutUrl = response.data.attributes.url;
 
     return {
       id: response.data.id,
+      url: checkoutUrl,
       status:
         checkoutStatus === "paid" || checkoutStatus === "completed"
           ? "succeeded"
           : checkoutStatus === "pending"
             ? "pending"
             : "pending",
-      amount: input.amount,
+      amount: input.amount || 0, // Will be updated from checkout if using variant price
       currency: input.currency,
       provider: this.name,
       email: input.email,
@@ -198,15 +242,20 @@ export class LemonSqueezyProvider implements PaymentProvider {
         id: string;
         attributes: {
           status: string;
+          url?: string;
         };
       };
     };
+
+    // Extract checkout URL if available
+    const checkoutUrl = response.data.attributes.url;
 
     // Note: In Lemon Squeezy, subscriptions are created after checkout completion
     // This returns the checkout ID - the actual subscription will be created via webhook
     return {
       id: response.data.id,
-      status: "active", // Will be updated via webhook when subscription is created
+      url: checkoutUrl,
+      status: "pending", // Will be updated via webhook when subscription is created
       plan: input.plan,
       currency: input.currency,
       provider: this.name,

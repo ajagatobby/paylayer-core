@@ -130,11 +130,34 @@ export class PaddleProvider implements PaymentProvider {
   async charge(input: ChargeInput): Promise<ChargeResult> {
     // Paddle uses transactions for one-time payments via checkout
     // Note: Paddle requires a price_id for transactions
-    const priceId = process.env.PADDLE_DEFAULT_PRICE_ID;
-    if (!priceId) {
-      throw new Error(
-        "PADDLE_DEFAULT_PRICE_ID environment variable is required for charges. Create a price in Paddle dashboard first."
-      );
+    let priceId: string;
+
+    if (input.productId) {
+      // Product ID - fetch product and use its first price
+      // Note: Paddle API requires fetching the product to get its prices
+      const product = (await this.request(
+        "GET",
+        `/products/${input.productId}`
+      )) as {
+        id: string;
+        prices?: Array<{ id: string }>;
+      };
+
+      if (!product.prices || product.prices.length === 0) {
+        throw new Error(
+          `No prices found for product "${input.productId}". Please ensure the product has at least one price configured.`
+        );
+      }
+
+      priceId = product.prices[0].id;
+    } else {
+      // Prioritize input.priceId over environment variable
+      priceId = input.priceId || process.env.PADDLE_DEFAULT_PRICE_ID;
+      if (!priceId) {
+        throw new Error(
+          "Either productId, priceId must be provided in input or PADDLE_DEFAULT_PRICE_ID environment variable must be set. Create a price in Paddle dashboard first."
+        );
+      }
     }
 
     // Create a transaction with automatic collection mode
@@ -151,15 +174,16 @@ export class PaddleProvider implements PaymentProvider {
       collection_mode: "automatic",
       custom_data: {
         paylayer_provider: this.name,
-        amount: input.amount.toString(),
+        amount: input.amount?.toString() || "0",
       },
     })) as PaddleTransactionResponse;
 
-    // Note: The checkout URL is available in response.data.checkout?.url
-    // This can be used to redirect customers to complete payment
+    // Extract checkout URL from response
+    const checkoutUrl = response.data.checkout?.url;
 
     return {
       id: response.data.id,
+      url: checkoutUrl,
       status:
         response.data.status === "completed"
           ? "succeeded"
@@ -198,14 +222,16 @@ export class PaddleProvider implements PaymentProvider {
       },
     })) as PaddleTransactionResponse;
 
-    // Note: The checkout URL is available in response.data.checkout?.url
+    // Extract checkout URL from response
+    const checkoutUrl = response.data.checkout?.url;
     // The actual subscription will be created via webhook after checkout completion
     // For now, we return the transaction ID as a temporary subscription ID
     // The webhook handler should update this when the subscription is created
 
     return {
       id: response.data.id, // Transaction ID - will be replaced by subscription ID via webhook
-      status: "active", // Placeholder - subscription will be created via webhook after checkout
+      url: checkoutUrl,
+      status: "pending", // Will be updated via webhook after checkout
       plan: response.data.items[0]?.price.id || input.plan,
       currency: response.data.currency_code.toUpperCase(),
       provider: this.name,

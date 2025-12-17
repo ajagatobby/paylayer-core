@@ -7,6 +7,8 @@ import type {
   ChargeResult,
   SubscribeInput,
   SubscriptionResult,
+  CheckoutInput,
+  CheckoutResult,
 } from "../types.js";
 
 export interface PaymentProvider {
@@ -44,6 +46,12 @@ export interface PaymentProvider {
    * Generates a billing portal URL
    */
   portal(email: string): Promise<string>;
+
+  /**
+   * Creates a checkout session/payment link
+   * Returns a URL that can be opened in a browser to complete payment
+   */
+  checkout(input: CheckoutInput): Promise<CheckoutResult>;
 
   /**
    * Verifies webhook signature

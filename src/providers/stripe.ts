@@ -9,6 +9,8 @@ import type {
   ChargeResult,
   SubscribeInput,
   SubscriptionResult,
+  CheckoutInput,
+  CheckoutResult,
 } from "../types.js";
 import { isSandbox } from "./env.js";
 
@@ -53,6 +55,15 @@ interface StripePrice {
 
 interface StripePriceList {
   data: StripePrice[];
+}
+
+/**
+ * Stripe Checkout Session object
+ */
+interface StripeCheckoutSession {
+  id: string;
+  url: string;
+  amount_total?: number;
 }
 
 /**
@@ -142,6 +153,48 @@ export class StripeProvider implements PaymentProvider {
     }
   }
 
+  /**
+   * Helper method to recursively append nested objects to form data
+   * Handles deeply nested structures like line_items[0][price_data][product_data][name]
+   */
+  private appendNestedObject(
+    formData: URLSearchParams,
+    prefix: string,
+    obj: Record<string, unknown>
+  ): void {
+    for (const [key, value] of Object.entries(obj)) {
+      const fullKey = `${prefix}[${key}]`;
+
+      if (value === undefined || value === null) {
+        continue;
+      }
+
+      if (typeof value === "object" && !Array.isArray(value)) {
+        // Recursively handle nested objects
+        this.appendNestedObject(
+          formData,
+          fullKey,
+          value as Record<string, unknown>
+        );
+      } else if (Array.isArray(value)) {
+        // Handle arrays within nested objects
+        if (value.length > 0 && typeof value[0] === "string") {
+          for (const item of value) {
+            formData.append(`${fullKey}[]`, String(item));
+          }
+        } else {
+          for (let i = 0; i < value.length; i++) {
+            const item = value[i] as Record<string, unknown>;
+            this.appendNestedObject(formData, `${fullKey}[${i}]`, item);
+          }
+        }
+      } else {
+        // Primitive value
+        formData.append(fullKey, String(value));
+      }
+    }
+  }
+
   private async request<T>(
     method: string,
     endpoint: string,
@@ -208,11 +261,19 @@ export class StripeProvider implements PaymentProvider {
               }
             }
           } else if (Array.isArray(value)) {
-            // Handle arrays (like items)
-            for (let i = 0; i < value.length; i++) {
-              const item = value[i] as Record<string, unknown>;
-              for (const [itemKey, itemValue] of Object.entries(item)) {
-                formData.append(`${key}[${i}][${itemKey}]`, String(itemValue));
+            // Handle arrays
+            if (value.length > 0 && typeof value[0] === "string") {
+              // Array of strings (like expand parameter)
+              // Stripe expects expand[]=value1&expand[]=value2 format
+              for (const item of value) {
+                formData.append(`${key}[]`, String(item));
+              }
+            } else {
+              // Array of objects (like line_items)
+              // Need to handle nested objects recursively
+              for (let i = 0; i < value.length; i++) {
+                const item = value[i] as Record<string, unknown>;
+                this.appendNestedObject(formData, `${key}[${i}]`, item);
               }
             }
           } else {
@@ -273,78 +334,110 @@ export class StripeProvider implements PaymentProvider {
   }
 
   /**
-   * Creates a one-time payment charge using Stripe PaymentIntent
+   * Creates a one-time payment charge using Stripe Checkout Session
+   * Returns a payment URL that can be opened in a browser to complete payment
    *
-   * IMPORTANT: PaymentIntents require client-side confirmation using Stripe.js
-   * The returned PaymentIntent will be in "pending" status until confirmed.
-   * Use the PaymentIntent's client_secret with Stripe.js to complete the payment.
-   *
-   * @param input - Charge input with amount, currency, and optional email
-   * @returns Charge result with PaymentIntent ID and status
+   * @param input - Charge input with amount, currency, optional email, and URLs
+   * @returns Charge result with Checkout Session ID, URL, and status
    */
   async charge(input: ChargeInput): Promise<ChargeResult> {
-    // Convert amount to cents (Stripe uses smallest currency unit)
-    const amountInCents = Math.round(input.amount * 100);
+    // Prioritize input URLs over environment variables
+    const successUrl =
+      input.successUrl ??
+      process.env.PAYLAYER_SUCCESS_URL ??
+      process.env.STRIPE_CHECKOUT_SUCCESS_URL ??
+      "https://app.example.com/success?session_id={CHECKOUT_SESSION_ID}";
+    const cancelUrl =
+      input.cancelUrl ??
+      process.env.PAYLAYER_CANCEL_URL ??
+      process.env.STRIPE_CHECKOUT_CANCEL_URL ??
+      "https://app.example.com/cancel";
 
-    // Create or retrieve customer if email provided
-    // Note: Multiple customers can have the same email in Stripe
-    // This will retrieve the first customer found with the given email
-    let customerId: string | undefined;
-    if (input.email) {
-      const customers = await this.request<StripeCustomerList>(
-        "GET",
-        "/v1/customers",
-        {
-          email: input.email,
-          limit: 1,
-        }
-      );
-      if (customers.data.length > 0) {
-        customerId = customers.data[0].id;
-      } else {
-        const customer = await this.request<StripeCustomer>(
-          "POST",
-          "/v1/customers",
-          {
-            email: input.email,
-          }
+    // Build line items based on whether productId, priceId, or amount is provided
+    let lineItems: Array<{
+      price?: string;
+      price_data?: {
+        currency: string;
+        product_data: { name: string };
+        unit_amount: number;
+      };
+      quantity: number;
+    }>;
+
+    if (input.productId) {
+      // Product ID - find one-time price for this product
+      const prices = await this.request<StripePriceList>("GET", "/v1/prices", {
+        product: input.productId,
+        type: "one_time",
+        limit: 1,
+      });
+
+      if (prices.data.length === 0) {
+        throw new Error(
+          `No one-time price found for product "${input.productId}". Please ensure the product has a one-time price configured.`
         );
-        customerId = customer.id;
       }
+
+      lineItems = [
+        {
+          price: prices.data[0].id,
+          quantity: 1,
+        },
+      ];
+    } else if (input.priceId) {
+      // Use price ID directly
+      lineItems = [
+        {
+          price: input.priceId,
+          quantity: 1,
+        },
+      ];
+    } else if (input.amount) {
+      // Convert amount to cents (Stripe uses smallest currency unit)
+      const amountInCents = Math.round(input.amount * 100);
+      lineItems = [
+        {
+          price_data: {
+            currency: input.currency.toLowerCase(),
+            product_data: {
+              name: "Payment",
+            },
+            unit_amount: amountInCents,
+          },
+          quantity: 1,
+        },
+      ];
+    } else {
+      throw new Error("Either productId, priceId, or amount must be provided");
     }
 
-    // Create PaymentIntent for one-time payment
-    // Using automatic_payment_methods for modern Stripe integration
-    // This allows Stripe to automatically determine compatible payment methods
-    const paymentIntent = await this.request<StripePaymentIntent>(
+    // Create Checkout Session for one-time payment
+    const session = await this.request<StripeCheckoutSession>(
       "POST",
-      "/v1/payment_intents",
+      "/v1/checkout/sessions",
       {
-        amount: amountInCents,
-        currency: input.currency.toLowerCase(),
-        customer: customerId,
-        automatic_payment_methods: {
-          enabled: true,
-        },
-        confirmation_method: "automatic",
+        mode: "payment",
+        payment_method_types: ["card"],
+        line_items: lineItems,
+        customer_email: input.email,
+        success_url: successUrl,
+        cancel_url: cancelUrl,
         metadata: {
           paylayer_provider: this.name,
         },
       }
     );
 
-    // PaymentIntents are created in requires_payment_method or requires_confirmation status
-    // They need client-side confirmation via Stripe.js before they can succeed
-    // Return "pending" for all non-terminal statuses
+    // Get amount from input
+    // If using productId or priceId without amount, amount will be determined by the price
+    // and can be retrieved from the checkout session details or webhook
+    const amount = input.amount || 0;
+
     return {
-      id: paymentIntent.id,
-      status:
-        paymentIntent.status === "succeeded"
-          ? "succeeded"
-          : paymentIntent.status === "canceled"
-            ? "failed"
-            : "pending",
-      amount: input.amount,
+      id: session.id,
+      url: session.url,
+      status: "pending",
+      amount,
       currency: input.currency,
       provider: this.name,
       email: input.email,
@@ -352,75 +445,86 @@ export class StripeProvider implements PaymentProvider {
   }
 
   /**
-   * Creates a subscription using Stripe
+   * Creates a subscription using Stripe Checkout Session
+   * Returns a payment URL that can be opened in a browser to complete subscription
    *
-   * Uses payment_behavior: 'allow_incomplete' to handle SCA (Strong Customer Authentication)
-   * scenarios gracefully. Subscriptions may start in 'incomplete' status if payment requires
-   * customer action.
-   *
-   * Note: Multiple customers can have the same email in Stripe.
-   * This will retrieve the first customer found with the given email.
-   *
-   * @param input - Subscription input with plan (lookup_key), currency, and email
-   * @returns Subscription result with subscription ID and status
+   * @param input - Subscription input with plan, currency, email, and optional URLs
+   * @returns Subscription result with Checkout Session ID, URL, and status
    */
   async subscribe(input: SubscribeInput): Promise<SubscriptionResult> {
     if (!input.email) {
       throw new Error("Email is required for Stripe subscriptions");
     }
 
-    // Create or retrieve customer
-    // Note: Multiple customers can have the same email in Stripe
-    // This will retrieve the first customer found with the given email
-    let customerId: string;
-    const customers = await this.request<StripeCustomerList>(
-      "GET",
-      "/v1/customers",
-      {
-        email: input.email,
+    // Prioritize input URLs over environment variables
+    const successUrl =
+      input.successUrl ??
+      process.env.PAYLAYER_SUCCESS_URL ??
+      process.env.STRIPE_CHECKOUT_SUCCESS_URL ??
+      "https://app.example.com/success?session_id={CHECKOUT_SESSION_ID}";
+    const cancelUrl =
+      input.cancelUrl ??
+      process.env.PAYLAYER_CANCEL_URL ??
+      process.env.STRIPE_CHECKOUT_CANCEL_URL ??
+      "https://app.example.com/cancel";
+
+    // Find price by plan identifier
+    // Supports three formats:
+    // 1. Price ID (price_xxx) - use directly
+    // 2. Product ID (prod_xxx) - find first recurring price for the product
+    // 3. Lookup key (string) - find price by lookup_key
+    let priceId: string;
+
+    if (input.plan.startsWith("price_")) {
+      // Direct price ID
+      priceId = input.plan;
+    } else if (input.plan.startsWith("prod_")) {
+      // Product ID - find prices for this product
+      const prices = await this.request<StripePriceList>("GET", "/v1/prices", {
+        product: input.plan,
+        type: "recurring",
         limit: 1,
+      });
+
+      if (prices.data.length === 0) {
+        throw new Error(
+          `No recurring price found for product "${input.plan}". Please ensure the product has a recurring price configured.`
+        );
       }
-    );
-    if (customers.data.length > 0) {
-      customerId = customers.data[0].id;
+
+      priceId = prices.data[0].id;
     } else {
-      const customer = await this.request<StripeCustomer>(
-        "POST",
-        "/v1/customers",
-        {
-          email: input.email,
-        }
-      );
-      customerId = customer.id;
+      // Lookup key - find price by lookup_key
+      const prices = await this.request<StripePriceList>("GET", "/v1/prices", {
+        lookup_keys: [input.plan],
+        limit: 1,
+      });
+
+      if (prices.data.length === 0) {
+        throw new Error(
+          `No price found with lookup_key "${input.plan}". Please create a price in Stripe dashboard with this lookup_key first, or use a price ID (price_xxx) or product ID (prod_xxx).`
+        );
+      }
+
+      priceId = prices.data[0].id;
     }
 
-    // Find price by lookup_key
-    // IMPORTANT: Prices must be pre-configured in Stripe dashboard
-    // The input.plan should be the lookup_key of an existing price
-    const prices = await this.request<StripePriceList>("GET", "/v1/prices", {
-      lookup_keys: [input.plan],
-      limit: 1,
-    });
-
-    if (prices.data.length === 0) {
-      throw new Error(
-        `No price found with lookup_key "${input.plan}". Please create a price in Stripe dashboard with this lookup_key first.`
-      );
-    }
-
-    const priceId = prices.data[0].id;
-
-    // Create subscription with payment behavior for SCA handling
-    // payment_behavior: 'allow_incomplete' allows subscription creation even if
-    // the first invoice can't be paid immediately (e.g., requires SCA)
-    const subscription = await this.request<StripeSubscription>(
+    // Create Checkout Session for subscription
+    const session = await this.request<StripeCheckoutSession>(
       "POST",
-      "/v1/subscriptions",
+      "/v1/checkout/sessions",
       {
-        customer: customerId,
-        items: [{ price: priceId }],
-        payment_behavior: "allow_incomplete",
-        collection_method: "charge_automatically",
+        mode: "subscription",
+        payment_method_types: ["card"],
+        line_items: [
+          {
+            price: priceId,
+            quantity: 1,
+          },
+        ],
+        customer_email: input.email,
+        success_url: successUrl,
+        cancel_url: cancelUrl,
         metadata: {
           paylayer_provider: this.name,
           paylayer_plan: input.plan,
@@ -428,40 +532,12 @@ export class StripeProvider implements PaymentProvider {
       }
     );
 
-    // Map Stripe subscription statuses to PayLayer statuses
-    // Handle all possible subscription statuses
-    let status: "active" | "paused" | "cancelled" | "past_due";
-    switch (subscription.status) {
-      case "active":
-      case "trialing":
-        status = "active";
-        break;
-      case "past_due":
-      case "unpaid":
-        status = "past_due";
-        break;
-      case "canceled":
-        status = "cancelled";
-        break;
-      case "paused":
-        status = "paused";
-        break;
-      case "incomplete":
-      case "incomplete_expired":
-        // Incomplete subscriptions are treated as active but may need attention
-        // The subscription exists but payment hasn't been completed yet
-        status = "active";
-        break;
-      default:
-        // Fallback to active for unknown statuses
-        status = "active";
-    }
-
     return {
-      id: subscription.id,
-      status,
+      id: session.id,
+      url: session.url,
+      status: "pending",
       plan: input.plan,
-      currency: subscription.currency.toUpperCase(),
+      currency: input.currency,
       provider: this.name,
       email: input.email,
     };
@@ -594,6 +670,139 @@ export class StripeProvider implements PaymentProvider {
     );
 
     return session.url;
+  }
+
+  /**
+   * Creates a Stripe Checkout Session for payment or subscription
+   * Returns a URL that can be opened in a browser to complete payment
+   *
+   * @param input - Checkout input with amount/plan, currency, email, and URLs
+   * @returns Checkout result with URL and session ID
+   */
+  async checkout(input: CheckoutInput): Promise<CheckoutResult> {
+    if (!input.plan && !input.amount) {
+      throw new Error(
+        "Either 'amount' (for one-time payment) or 'plan' (for subscription) is required"
+      );
+    }
+
+    // Prioritize input URLs over environment variables
+    const successUrl =
+      input.successUrl ??
+      process.env.PAYLAYER_SUCCESS_URL ??
+      process.env.STRIPE_CHECKOUT_SUCCESS_URL ??
+      "https://example.com/success?session_id={CHECKOUT_SESSION_ID}";
+    const cancelUrl =
+      input.cancelUrl ??
+      process.env.PAYLAYER_CANCEL_URL ??
+      process.env.STRIPE_CHECKOUT_CANCEL_URL ??
+      "https://example.com/cancel";
+
+    if (input.plan) {
+      // Subscription checkout
+      // Find price by plan (supports price ID, product ID, or lookup key)
+      let priceId: string;
+
+      if (input.plan.startsWith("price_")) {
+        priceId = input.plan;
+      } else if (input.plan.startsWith("prod_")) {
+        const prices = await this.request<StripePriceList>(
+          "GET",
+          "/v1/prices",
+          {
+            product: input.plan,
+            type: "recurring",
+            limit: 1,
+          }
+        );
+
+        if (prices.data.length === 0) {
+          throw new Error(
+            `No recurring price found for product "${input.plan}". Please ensure the product has a recurring price configured.`
+          );
+        }
+
+        priceId = prices.data[0].id;
+      } else {
+        const prices = await this.request<StripePriceList>(
+          "GET",
+          "/v1/prices",
+          {
+            lookup_keys: [input.plan],
+            limit: 1,
+          }
+        );
+
+        if (prices.data.length === 0) {
+          throw new Error(
+            `No price found with lookup_key "${input.plan}". Please create a price in Stripe dashboard with this lookup_key first, or use a price ID (price_xxx) or product ID (prod_xxx).`
+          );
+        }
+
+        priceId = prices.data[0].id;
+      }
+
+      const session = await this.request<StripeCheckoutSession>(
+        "POST",
+        "/v1/checkout/sessions",
+        {
+          mode: "subscription",
+          payment_method_types: ["card"],
+          line_items: [
+            {
+              price: priceId,
+              quantity: 1,
+            },
+          ],
+          customer_email: input.email,
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+        }
+      );
+
+      return {
+        url: session.url,
+        id: session.id,
+        provider: this.name,
+      };
+    } else {
+      // One-time payment checkout
+      if (!input.amount) {
+        throw new Error("Amount is required for one-time payment checkout");
+      }
+
+      const amountInCents = Math.round(input.amount * 100);
+
+      const session = await this.request<StripeCheckoutSession>(
+        "POST",
+        "/v1/checkout/sessions",
+        {
+          mode: "payment",
+          payment_method_types: ["card"],
+          line_items: [
+            {
+              price_data: {
+                currency: input.currency.toLowerCase(),
+                product_data: {
+                  name: "Payment",
+                },
+                unit_amount: amountInCents,
+              },
+              quantity: 1,
+            },
+          ],
+          customer_email: input.email,
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+        }
+      );
+
+      return {
+        url: session.url,
+        id: session.id,
+        provider: this.name,
+      };
+    }
   }
 
   /**

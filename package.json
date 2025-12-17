@@ -24,7 +24,8 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "pack": "npm run build && npm pack"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

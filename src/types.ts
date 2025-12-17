@@ -156,9 +156,13 @@ export type CurrencyCode = `${Currency}`;
 export type Provider = string; // Payment provider identifier
 
 export interface ChargeInput {
-  amount: number;
+  amount?: number;
+  priceId?: string;
+  productId?: string;
   currency: CurrencyCode;
   email?: string;
+  successUrl?: string;
+  cancelUrl?: string;
 }
 
 export interface ChargeResult {
@@ -168,12 +172,15 @@ export interface ChargeResult {
   currency: CurrencyCode;
   provider: Provider;
   email?: string;
+  url?: string;
 }
 
 export interface SubscribeInput {
   plan: string;
   currency: CurrencyCode;
   email?: string;
+  successUrl?: string;
+  cancelUrl?: string;
 }
 
 export interface SubscriptionResult {
@@ -183,6 +190,22 @@ export interface SubscriptionResult {
   currency: CurrencyCode;
   provider: Provider;
   email?: string;
+  url?: string;
+}
+
+export interface CheckoutInput {
+  amount?: number;
+  currency: CurrencyCode;
+  email?: string;
+  plan?: string; // For subscription checkout
+  successUrl?: string;
+  cancelUrl?: string;
+}
+
+export interface CheckoutResult {
+  url: string;
+  id: string;
+  provider: Provider;
 }
 
 export type EventType =

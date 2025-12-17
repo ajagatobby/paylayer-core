@@ -150,10 +150,67 @@ export class PayPalProvider implements PaymentProvider {
     // PayPal uses Orders API for one-time payments
     // Note: PayPal Orders API requires user approval via redirect for most cases
     // This creates an order that will be in CREATED status until user approves
+    let amount: number;
+
+    if (input.productId) {
+      // Product ID - fetch product and use its price
+      // Note: PayPal Catalog API can be used to get product details
+      try {
+        const product = (await this.request(
+          "GET",
+          `/v1/catalogs/products/${input.productId}`
+        )) as {
+          id: string;
+          pricing_models?: Array<{
+            pricing_tiers?: Array<{
+              amount?: { value: string; currency_code: string };
+            }>;
+          }>;
+        };
+
+        // Try to get price from product
+        // PayPal product pricing structure can vary, so we'll try to extract it
+        if (
+          product.pricing_models &&
+          product.pricing_models.length > 0 &&
+          product.pricing_models[0].pricing_tiers &&
+          product.pricing_models[0].pricing_tiers.length > 0 &&
+          product.pricing_models[0].pricing_tiers[0].amount
+        ) {
+          const productAmount = parseFloat(
+            product.pricing_models[0].pricing_tiers[0].amount.value
+          );
+          if (productAmount > 0) {
+            amount = productAmount;
+          }
+        }
+
+        if (!amount) {
+          throw new Error(
+            `Could not determine price for product "${input.productId}". Please provide amount directly or ensure the product has pricing configured.`
+          );
+        }
+      } catch (error) {
+        throw new Error(
+          `Failed to fetch product "${input.productId}": ${error instanceof Error ? error.message : "Unknown error"}. Please provide amount directly.`
+        );
+      }
+    } else if (input.amount) {
+      amount = input.amount;
+    } else {
+      throw new Error(
+        "PayPal requires either productId or amount for one-time payments. priceId is not supported for charges."
+      );
+    }
+
     const returnUrl =
-      process.env.PAYPAL_RETURN_URL || "https://app.example.com/success";
+      input.successUrl ||
+      process.env.PAYPAL_RETURN_URL ||
+      "https://app.example.com/success";
     const cancelUrl =
-      process.env.PAYPAL_CANCEL_URL || "https://app.example.com/cancel";
+      input.cancelUrl ||
+      process.env.PAYPAL_CANCEL_URL ||
+      "https://app.example.com/cancel";
 
     const order = (await this.request("POST", "/v2/checkout/orders", {
       intent: "CAPTURE",
@@ -161,9 +218,9 @@ export class PayPalProvider implements PaymentProvider {
         {
           amount: {
             currency_code: input.currency,
-            value: input.amount.toFixed(2),
+            value: amount.toFixed(2),
           },
-          description: `Payment of ${input.amount} ${input.currency}`,
+          description: `Payment of ${amount} ${input.currency}`,
           payee: input.email
             ? {
                 email_address: input.email,
@@ -181,22 +238,20 @@ export class PayPalProvider implements PaymentProvider {
       links?: Array<{ href: string; rel: string; method: string }>;
     };
 
-    // PayPal Orders API requires user approval via redirect
-    // The order will be in CREATED status until user approves and payment is captured
-    // After creating the order, you must:
-    // 1. Get the approval URL from order.links (where rel="approve") and redirect the user
-    // 2. After user approval and redirect to return_url, call captureOrder(orderId) to complete the payment
-    // 3. The payment status will be "pending" until capture is called
+    // Extract approval URL from order links
+    const approvalLink = order.links?.find((link) => link.rel === "approve");
+    const approvalUrl = approvalLink?.href;
 
     return {
       id: order.id,
+      url: approvalUrl,
       status:
         order.status === "COMPLETED"
           ? "succeeded"
           : order.status === "FAILED" || order.status === "VOIDED"
             ? "failed"
             : "pending", // CREATED and other statuses map to pending
-      amount: input.amount,
+      amount,
       currency: input.currency,
       provider: this.name,
       email: input.email,
@@ -281,8 +336,15 @@ export class PayPalProvider implements PaymentProvider {
       links?: Array<{ href: string; rel: string }>;
     };
 
+    // Extract approval URL from subscription links
+    const approvalLink = subscription.links?.find(
+      (link) => link.rel === "approve" || link.rel === "approval_url"
+    );
+    const approvalUrl = approvalLink?.href;
+
     return {
       id: subscription.id,
+      url: approvalUrl,
       status:
         subscription.status === "ACTIVE"
           ? "active"
@@ -290,7 +352,7 @@ export class PayPalProvider implements PaymentProvider {
             ? "paused"
             : subscription.status === "CANCELLED"
               ? "cancelled"
-              : "active",
+              : "pending",
       plan: subscription.plan_id || input.plan,
       currency: input.currency,
       provider: this.name,
