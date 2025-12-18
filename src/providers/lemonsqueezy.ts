@@ -35,26 +35,171 @@ export class LemonSqueezyProvider implements PaymentProvider {
     body?: unknown
   ): Promise<unknown> {
     const url = `${this.baseUrl}${endpoint}`;
-    const response = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        Accept: "application/vnd.api+json",
-        "Content-Type": "application/vnd.api+json",
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
 
-    if (!response.ok) {
-      const error = await response
-        .json()
-        .catch(() => ({ message: "Unknown error" }));
-      throw new Error(
-        `Lemon Squeezy API error: ${response.status} - ${JSON.stringify(error)}`
-      );
+    // Create AbortController for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          Accept: "application/vnd.api+json",
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const error = await response
+          .json()
+          .catch(() => ({ message: "Unknown error" }));
+        throw new Error(
+          `Lemon Squeezy API error: ${response.status} - ${JSON.stringify(error)}`
+        );
+      }
+
+      return response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+
+      // Handle AbortController timeout
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(
+          `Lemon Squeezy API request timed out after 30 seconds. Please check your network connection and try again.`
+        );
+      }
+
+      // Handle network-level errors (connection timeouts, DNS failures, etc.)
+      if (error instanceof Error) {
+        // Check for AggregateError (common in Node.js fetch/undici)
+        if (error.name === "AggregateError" && "errors" in error) {
+          const aggregateError = error as Error & {
+            errors?: unknown[];
+            code?: string;
+          };
+          const errors = aggregateError.errors || [];
+          const errorCodes = new Set<string>();
+
+          // Extract error codes from nested errors
+          for (const nestedError of errors) {
+            if (
+              nestedError &&
+              typeof nestedError === "object" &&
+              "code" in nestedError
+            ) {
+              errorCodes.add(String(nestedError.code));
+            }
+          }
+
+          // Check for common network error codes
+          if (
+            errorCodes.has("ETIMEDOUT") ||
+            aggregateError.code === "ETIMEDOUT"
+          ) {
+            throw new Error(
+              `Lemon Squeezy API connection timed out. This usually indicates:\n` +
+                `  1. Network connectivity issues\n` +
+                `  2. The API endpoint (${url}) is unreachable\n` +
+                `  3. Firewall or proxy blocking the connection\n` +
+                `  4. DNS resolution problems\n\n` +
+                `Please verify:\n` +
+                `  - Your internet connection is working\n` +
+                `  - The LEMONSQUEEZY_BASE_URL is correct (currently: ${this.baseUrl})\n` +
+                `  - No firewall/proxy is blocking outbound HTTPS connections\n` +
+                `  - Try accessing ${this.baseUrl} in your browser to verify it's reachable`
+            );
+          }
+
+          if (
+            errorCodes.has("ECONNREFUSED") ||
+            aggregateError.code === "ECONNREFUSED"
+          ) {
+            throw new Error(
+              `Lemon Squeezy API connection refused. The server at ${url} is not accepting connections.\n` +
+                `Please verify the LEMONSQUEEZY_BASE_URL is correct (currently: ${this.baseUrl})`
+            );
+          }
+
+          if (
+            errorCodes.has("ENOTFOUND") ||
+            aggregateError.code === "ENOTFOUND"
+          ) {
+            throw new Error(
+              `Lemon Squeezy API hostname not found. DNS resolution failed for ${this.baseUrl}.\n` +
+                `Please verify:\n` +
+                `  - Your DNS settings are correct\n` +
+                `  - The LEMONSQUEEZY_BASE_URL is correct (currently: ${this.baseUrl})\n` +
+                `  - You have internet connectivity`
+            );
+          }
+
+          // Generic AggregateError handling
+          throw new Error(
+            `Lemon Squeezy API network error: ${error.message}\n` +
+              `This may indicate connectivity issues. Please check your network connection and try again.\n` +
+              `Request URL: ${url}`
+          );
+        }
+
+        // Handle individual network error codes
+        if ("code" in error) {
+          const errorCode = (error as Error & { code?: string }).code;
+
+          if (errorCode === "ETIMEDOUT") {
+            throw new Error(
+              `Lemon Squeezy API connection timed out. Please check your network connection.\n` +
+                `Request URL: ${url}`
+            );
+          }
+
+          if (errorCode === "ECONNREFUSED") {
+            throw new Error(
+              `Lemon Squeezy API connection refused. The server is not accepting connections.\n` +
+                `Request URL: ${url}`
+            );
+          }
+
+          if (errorCode === "ENOTFOUND") {
+            throw new Error(
+              `Lemon Squeezy API hostname not found. DNS resolution failed.\n` +
+                `Request URL: ${url}`
+            );
+          }
+        }
+
+        // Check if error message contains timeout-related keywords
+        const errorMessage = error.message.toLowerCase();
+        if (
+          errorMessage.includes("timeout") ||
+          errorMessage.includes("timed out")
+        ) {
+          throw new Error(
+            `Lemon Squeezy API request timed out: ${error.message}\n` +
+              `This usually indicates network connectivity issues. Please check your connection and try again.\n` +
+              `Request URL: ${url}`
+          );
+        }
+
+        // Check if error message contains fetch failed
+        if (errorMessage.includes("fetch failed")) {
+          throw new Error(
+            `Lemon Squeezy API request failed: ${error.message}\n` +
+              `This usually indicates a network connectivity issue. Please verify:\n` +
+              `  - Your internet connection is working\n` +
+              `  - The API endpoint is reachable: ${url}\n` +
+              `  - No firewall or proxy is blocking the connection`
+          );
+        }
+      }
+
+      // Re-throw if we couldn't categorize the error
+      throw error;
     }
-
-    return response.json();
   }
 
   async charge(input: ChargeInput): Promise<ChargeResult> {
@@ -67,39 +212,220 @@ export class LemonSqueezyProvider implements PaymentProvider {
     let variantId: string;
 
     if (input.productId) {
-      // Product ID - fetch product and use its first variant
-      const product = (await this.request(
-        "GET",
-        `/v1/products/${input.productId}`
-      )) as {
-        data: {
-          id: string;
-          attributes: {
-            variants?: {
-              data?: Array<{ id: string }>;
+      // Product ID - fetch variants for this product
+      // Lemon Squeezy API: filter variants by product_id
+      // URL encode the product ID to handle special characters
+      const encodedProductId = encodeURIComponent(input.productId);
+      // Use a shorter timeout for the variants lookup (10 seconds)
+      const variantsUrl = `${this.baseUrl}/v1/variants?filter[product_id]=${encodedProductId}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      try {
+        const response = await fetch(variantsUrl, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            Accept: "application/vnd.api+json",
+            "Content-Type": "application/vnd.api+json",
+          },
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const error = await response
+            .json()
+            .catch(() => ({ message: "Unknown error" }));
+          throw new Error(
+            `Lemon Squeezy API error: ${response.status} - ${JSON.stringify(error)}`
+          );
+        }
+
+        const variants = (await response.json()) as {
+          data?: Array<{ id: string }>;
+        };
+
+        if (!variants.data || variants.data.length === 0) {
+          throw new Error(
+            `No variants found for product "${input.productId}". Please ensure the product has at least one variant configured.`
+          );
+        }
+
+        variantId = variants.data[0].id;
+      } catch (error) {
+        clearTimeout(timeoutId);
+
+        // If fetching variants fails, provide a helpful error message
+        if (error instanceof Error) {
+          // Preserve "No variants found" errors
+          if (error.message.includes("No variants found")) {
+            throw error;
+          }
+
+          // Handle AbortController timeout
+          if (error.name === "AbortError") {
+            throw new Error(
+              `Request to fetch variants for product "${input.productId}" timed out after 10 seconds. ` +
+                `This may indicate a network issue or the Lemon Squeezy API is unavailable. ` +
+                `Please try using priceId (variant ID) directly instead of productId, or check your network connection.`
+            );
+          }
+
+          // Handle network-level errors (connection timeouts, DNS failures, etc.)
+          if (error.name === "AggregateError" && "errors" in error) {
+            const aggregateError = error as Error & {
+              errors?: unknown[];
+              code?: string;
+            };
+            const errorCodes = new Set<string>();
+
+            // Extract error codes from nested errors
+            for (const nestedError of aggregateError.errors || []) {
+              if (
+                nestedError &&
+                typeof nestedError === "object" &&
+                "code" in nestedError
+              ) {
+                errorCodes.add(String(nestedError.code));
+              }
+            }
+
+            if (
+              errorCodes.has("ETIMEDOUT") ||
+              aggregateError.code === "ETIMEDOUT"
+            ) {
+              throw new Error(
+                `Failed to fetch variants for product "${input.productId}": Connection timed out. ` +
+                  `This usually indicates network connectivity issues. ` +
+                  `Please try using priceId (variant ID) directly instead of productId, or check your network connection.`
+              );
+            }
+
+            if (
+              errorCodes.has("ECONNREFUSED") ||
+              aggregateError.code === "ECONNREFUSED"
+            ) {
+              throw new Error(
+                `Failed to fetch variants for product "${input.productId}": Connection refused. ` +
+                  `The Lemon Squeezy API server is not accepting connections. ` +
+                  `Please verify your network connection and API endpoint configuration.`
+              );
+            }
+
+            if (
+              errorCodes.has("ENOTFOUND") ||
+              aggregateError.code === "ENOTFOUND"
+            ) {
+              throw new Error(
+                `Failed to fetch variants for product "${input.productId}": Hostname not found. ` +
+                  `DNS resolution failed. Please check your network connection and DNS settings.`
+              );
+            }
+          }
+
+          // Handle individual network error codes
+          if ("code" in error) {
+            const errorCode = (error as Error & { code?: string }).code;
+            if (
+              errorCode === "ETIMEDOUT" ||
+              errorCode === "ECONNREFUSED" ||
+              errorCode === "ENOTFOUND"
+            ) {
+              throw new Error(
+                `Failed to fetch variants for product "${input.productId}": Network error (${errorCode}). ` +
+                  `Please try using priceId (variant ID) directly instead of productId, or check your network connection.`
+              );
+            }
+          }
+
+          // Check if error message contains timeout-related keywords
+          const errorMessage = error.message.toLowerCase();
+          if (
+            errorMessage.includes("timeout") ||
+            errorMessage.includes("timed out") ||
+            errorMessage.includes("fetch failed")
+          ) {
+            throw new Error(
+              `Failed to fetch variants for product "${input.productId}": ${error.message}. ` +
+                `This usually indicates network connectivity issues. ` +
+                `Please try using priceId (variant ID) directly instead of productId, or check your network connection.`
+            );
+          }
+        }
+
+        throw new Error(
+          `Failed to fetch variants for product "${input.productId}": ${error instanceof Error ? error.message : "Unknown error"}. ` +
+            `Please verify the product ID is correct and you have API access, or use priceId (variant ID) directly instead.`
+        );
+      }
+    } else if (input.priceId) {
+      // In Lemon Squeezy, priceId refers to a variant ID
+      // Validate that the variant is one-time (not subscription)
+      try {
+        const variant = (await this.request(
+          "GET",
+          `/v1/variants/${input.priceId}`
+        )) as {
+          data: {
+            id: string;
+            attributes: {
+              is_subscription?: boolean;
             };
           };
         };
-      };
 
-      if (
-        !product.data.attributes.variants ||
-        !product.data.attributes.variants.data ||
-        product.data.attributes.variants.data.length === 0
-      ) {
-        throw new Error(
-          `No variants found for product "${input.productId}". Please ensure the product has at least one variant configured.`
-        );
+        // Also check prices to be thorough
+        const encodedVariantId = encodeURIComponent(input.priceId);
+        const prices = (await this.request(
+          "GET",
+          `/v1/prices?filter[variant_id]=${encodedVariantId}`
+        )) as {
+          data?: Array<{
+            attributes: {
+              category?: string;
+            };
+          }>;
+        };
+
+        const isSubscription =
+          variant.data.attributes.is_subscription === true ||
+          (prices.data &&
+            prices.data.length > 0 &&
+            prices.data.some(
+              (price) => price.attributes.category === "subscription"
+            ));
+
+        if (isSubscription) {
+          throw new Error(
+            `The variant "${input.priceId}" is configured as a recurring subscription, but you're using it with charge().\n` +
+              `To create a one-time payment, please:\n` +
+              `1. Go to your Lemon Squeezy Dashboard → Products\n` +
+              `2. Create a new variant with one-time pricing (not subscription)\n` +
+              `3. Use the new one-time variant ID in charge()\n\n` +
+              `Alternatively, if you want a recurring subscription, use pay.subscribe() instead of pay.charge().`
+          );
+        }
+      } catch (error) {
+        // If it's our validation error, re-throw it
+        if (
+          error instanceof Error &&
+          error.message.includes("configured as a recurring subscription")
+        ) {
+          throw error;
+        }
+        // For other errors (network, invalid variant ID, etc.), let them propagate
+        // The API will handle them appropriately
       }
 
-      variantId = product.data.attributes.variants.data[0].id;
+      variantId = input.priceId;
     } else {
-      // Prioritize input.priceId over environment variable
-      // In Lemon Squeezy, priceId refers to a variant ID
-      variantId = input.priceId || process.env.LEMONSQUEEZY_DEFAULT_VARIANT_ID;
+      // Only amount provided - use default variant ID from environment
+      variantId = process.env.LEMONSQUEEZY_DEFAULT_VARIANT_ID;
       if (!variantId) {
         throw new Error(
-          "Either productId, priceId must be provided in input or LEMONSQUEEZY_DEFAULT_VARIANT_ID environment variable must be set. Create a variant in Lemon Squeezy dashboard first."
+          "Either productId or priceId must be provided in input, or LEMONSQUEEZY_DEFAULT_VARIANT_ID environment variable must be set when using only amount. Create a variant in Lemon Squeezy dashboard first."
         );
       }
     }
@@ -128,13 +454,16 @@ export class LemonSqueezyProvider implements PaymentProvider {
       test_mode: isSandbox(this.name),
     };
 
-    // If amount is provided, use custom_price (overrides variant price)
-    // If only priceId is provided, use the variant's default price
-    if (input.amount) {
+    // If priceId is explicitly provided, use the variant's price (don't override with amount)
+    // If productId is provided (without priceId), allow amount to override variant price
+    // If only amount is provided (fetched variant from store), allow amount to override variant price
+    // Only set custom_price when amount should override the variant price
+    if (input.amount && !input.priceId) {
       // Convert amount to cents (Lemon Squeezy uses smallest currency unit)
       const amountInCents = Math.round(input.amount * 100);
       checkoutAttributes.custom_price = amountInCents;
     }
+    // If priceId is explicitly provided, we don't set custom_price - the variant's price will be used
 
     const response = (await this.request("POST", "/v1/checkouts", {
       data: {
@@ -196,6 +525,64 @@ export class LemonSqueezyProvider implements PaymentProvider {
     const storeId = process.env.LEMONSQUEEZY_STORE_ID;
     if (!storeId) {
       throw new Error("LEMONSQUEEZY_STORE_ID is required for subscriptions");
+    }
+
+    // Validate that the variant is configured for subscriptions (not one-time)
+    try {
+      const variant = (await this.request(
+        "GET",
+        `/v1/variants/${input.plan}`
+      )) as {
+        data: {
+          id: string;
+          attributes: {
+            is_subscription?: boolean;
+          };
+        };
+      };
+
+      // Also check prices to be thorough
+      const encodedVariantId = encodeURIComponent(input.plan);
+      const prices = (await this.request(
+        "GET",
+        `/v1/prices?filter[variant_id]=${encodedVariantId}`
+      )) as {
+        data?: Array<{
+          attributes: {
+            category?: string;
+          };
+        }>;
+      };
+
+      const isSubscription =
+        variant.data.attributes.is_subscription === true ||
+        (prices.data &&
+          prices.data.length > 0 &&
+          prices.data.some(
+            (price) => price.attributes.category === "subscription"
+          ));
+
+      if (!isSubscription) {
+        throw new Error(
+          `The variant "${input.plan}" is configured as a one-time payment, but you're using it with subscribe().\n` +
+            `To create a subscription, please:\n` +
+            `1. Go to your Lemon Squeezy Dashboard → Products\n` +
+            `2. Create a new variant with subscription pricing enabled\n` +
+            `3. Set the renewal interval (monthly, yearly, etc.)\n` +
+            `4. Use the new subscription variant ID in subscribe()\n\n` +
+            `Alternatively, if you want a one-time payment, use pay.charge() instead of pay.subscribe().`
+        );
+      }
+    } catch (error) {
+      // If it's our validation error, re-throw it
+      if (
+        error instanceof Error &&
+        error.message.includes("configured as a one-time payment")
+      ) {
+        throw error;
+      }
+      // For other errors (network, invalid variant ID, etc.), let them propagate
+      // The API will handle them appropriately
     }
 
     // Create a checkout for subscription
@@ -330,7 +717,7 @@ export class LemonSqueezyProvider implements PaymentProvider {
       id: response.data.id,
       status: "paused",
       plan: response.data.attributes.variant_id || "unknown",
-      currency: response.data.attributes.currency.toUpperCase(),
+      currency: response.data.attributes.currency?.toUpperCase() || "USD",
       provider: this.name,
     };
   }
@@ -365,7 +752,7 @@ export class LemonSqueezyProvider implements PaymentProvider {
       id: response.data.id,
       status: "active",
       plan: response.data.attributes.variant_id || "unknown",
-      currency: response.data.attributes.currency.toUpperCase(),
+      currency: response.data.attributes.currency?.toUpperCase() || "USD",
       provider: this.name,
     };
   }

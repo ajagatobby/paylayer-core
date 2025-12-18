@@ -51,6 +51,7 @@ interface StripePaymentIntent {
 interface StripePrice {
   id: string;
   lookup_key?: string;
+  type: "one_time" | "recurring";
 }
 
 interface StripePriceList {
@@ -385,6 +386,34 @@ export class StripeProvider implements PaymentProvider {
         },
       ];
     } else if (input.priceId) {
+      // Validate that the price is one-time (not recurring)
+      try {
+        const price = await this.request<StripePrice>(
+          "GET",
+          `/v1/prices/${input.priceId}`
+        );
+        if (price.type === "recurring") {
+          throw new Error(
+            `The price "${input.priceId}" is configured as a recurring subscription, but you're using it with charge().\n` +
+              `To create a one-time payment, please:\n` +
+              `1. Go to your Stripe Dashboard → Products\n` +
+              `2. Create a new price for this product with type "One-time"\n` +
+              `3. Use the new one-time price ID in charge()\n\n` +
+              `Alternatively, if you want a recurring subscription, use pay.subscribe() instead of pay.charge().`
+          );
+        }
+      } catch (error) {
+        // If it's our validation error, re-throw it
+        if (
+          error instanceof Error &&
+          error.message.includes("configured as a recurring subscription")
+        ) {
+          throw error;
+        }
+        // For other errors (network, invalid price ID, etc.), let them propagate
+        // The API will handle them appropriately
+      }
+
       // Use price ID directly
       lineItems = [
         {
@@ -507,6 +536,35 @@ export class StripeProvider implements PaymentProvider {
       }
 
       priceId = prices.data[0].id;
+    }
+
+    // Validate that the price is recurring (not one-time)
+    try {
+      const price = await this.request<StripePrice>(
+        "GET",
+        `/v1/prices/${priceId}`
+      );
+      if (price.type === "one_time") {
+        throw new Error(
+          `The price "${priceId}" is configured as a one-time payment, but you're using it with subscribe().\n` +
+            `To create a subscription, please:\n` +
+            `1. Go to your Stripe Dashboard → Products\n` +
+            `2. Create a new price for this product with type "Recurring"\n` +
+            `3. Set the billing interval (monthly, yearly, etc.)\n` +
+            `4. Use the new recurring price ID in subscribe()\n\n` +
+            `Alternatively, if you want a one-time payment, use pay.charge() instead of pay.subscribe().`
+        );
+      }
+    } catch (error) {
+      // If it's our validation error, re-throw it
+      if (
+        error instanceof Error &&
+        error.message.includes("configured as a one-time payment")
+      ) {
+        throw error;
+      }
+      // For other errors (network, invalid price ID, etc.), let them propagate
+      // The API will handle them appropriately
     }
 
     // Create Checkout Session for subscription

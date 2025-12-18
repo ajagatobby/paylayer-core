@@ -61,6 +61,14 @@ interface PaddlePortalSessionResponse {
   };
 }
 
+interface PaddlePrice {
+  id: string;
+  billing_cycle: {
+    interval: string;
+    frequency: number;
+  } | null;
+}
+
 export class PaddleProvider implements PaymentProvider {
   readonly name = "paddle";
   private apiKey: string;
@@ -150,6 +158,37 @@ export class PaddleProvider implements PaymentProvider {
       }
 
       priceId = product.prices[0].id;
+
+      // Validate that the price is one-time (not recurring)
+      try {
+        const price = (await this.request("GET", `/prices/${priceId}`)) as {
+          data: PaddlePrice;
+        };
+        if (
+          price.data.billing_cycle &&
+          price.data.billing_cycle !== null &&
+          price.data.billing_cycle !== undefined
+        ) {
+          throw new Error(
+            `The price "${priceId}" for product "${input.productId}" is configured as a recurring subscription, but you're using it with charge().\n` +
+              `To create a one-time payment, please:\n` +
+              `1. Go to your Paddle Dashboard → Products → Prices\n` +
+              `2. Create a new price without a billing cycle (one-time payment)\n` +
+              `3. Use the new one-time price ID in charge()\n\n` +
+              `Alternatively, if you want a recurring subscription, use pay.subscribe() instead of pay.charge().`
+          );
+        }
+      } catch (error) {
+        // If it's our validation error, re-throw it
+        if (
+          error instanceof Error &&
+          error.message.includes("configured as a recurring subscription")
+        ) {
+          throw error;
+        }
+        // For other errors (network, invalid price ID, etc.), let them propagate
+        // The API will handle them appropriately
+      }
     } else {
       // Prioritize input.priceId over environment variable
       priceId = input.priceId || process.env.PADDLE_DEFAULT_PRICE_ID;
@@ -157,6 +196,37 @@ export class PaddleProvider implements PaymentProvider {
         throw new Error(
           "Either productId, priceId must be provided in input or PADDLE_DEFAULT_PRICE_ID environment variable must be set. Create a price in Paddle dashboard first."
         );
+      }
+
+      // Validate that the price is one-time (not recurring)
+      try {
+        const price = (await this.request("GET", `/prices/${priceId}`)) as {
+          data: PaddlePrice;
+        };
+        if (
+          price.data.billing_cycle &&
+          price.data.billing_cycle !== null &&
+          price.data.billing_cycle !== undefined
+        ) {
+          throw new Error(
+            `The price "${priceId}" is configured as a recurring subscription, but you're using it with charge().\n` +
+              `To create a one-time payment, please:\n` +
+              `1. Go to your Paddle Dashboard → Products → Prices\n` +
+              `2. Create a new price without a billing cycle (one-time payment)\n` +
+              `3. Use the new one-time price ID in charge()\n\n` +
+              `Alternatively, if you want a recurring subscription, use pay.subscribe() instead of pay.charge().`
+          );
+        }
+      } catch (error) {
+        // If it's our validation error, re-throw it
+        if (
+          error instanceof Error &&
+          error.message.includes("configured as a recurring subscription")
+        ) {
+          throw error;
+        }
+        // For other errors (network, invalid price ID, etc.), let them propagate
+        // The API will handle them appropriately
       }
     }
 
@@ -200,6 +270,38 @@ export class PaddleProvider implements PaymentProvider {
   async subscribe(input: SubscribeInput): Promise<SubscriptionResult> {
     if (!input.email) {
       throw new Error("Email is required for Paddle subscriptions");
+    }
+
+    // Validate that the price is recurring (not one-time)
+    try {
+      const price = (await this.request("GET", `/prices/${input.plan}`)) as {
+        data: PaddlePrice;
+      };
+      if (
+        !price.data.billing_cycle ||
+        price.data.billing_cycle === null ||
+        price.data.billing_cycle === undefined
+      ) {
+        throw new Error(
+          `The price "${input.plan}" is configured as a one-time payment, but you're using it with subscribe().\n` +
+            `To create a subscription, please:\n` +
+            `1. Go to your Paddle Dashboard → Products → Prices\n` +
+            `2. Create a new price with a billing cycle (monthly, yearly, etc.)\n` +
+            `3. Set the interval and frequency for recurring billing\n` +
+            `4. Use the new recurring price ID in subscribe()\n\n` +
+            `Alternatively, if you want a one-time payment, use pay.charge() instead of pay.subscribe().`
+        );
+      }
+    } catch (error) {
+      // If it's our validation error, re-throw it
+      if (
+        error instanceof Error &&
+        error.message.includes("configured as a one-time payment")
+      ) {
+        throw error;
+      }
+      // For other errors (network, invalid price ID, etc.), let them propagate
+      // The API will handle them appropriately
     }
 
     // Paddle doesn't support direct subscription creation

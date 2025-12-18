@@ -161,12 +161,48 @@ export class PayPalProvider implements PaymentProvider {
           `/v1/catalogs/products/${input.productId}`
         )) as {
           id: string;
+          type?: string;
           pricing_models?: Array<{
             pricing_tiers?: Array<{
               amount?: { value: string; currency_code: string };
             }>;
           }>;
         };
+
+        // Check if product is a subscription product
+        // PayPal products can have type "SERVICE" for subscriptions
+        // We should check if there are any subscription plans associated with this product
+        // For now, we'll check the product type and warn if it might be a subscription
+        if (product.type === "SERVICE") {
+          // Try to check if there are subscription plans for this product
+          try {
+            const plans = (await this.request("GET", "/v1/billing/plans", {
+              product_id: input.productId,
+              page_size: 1,
+            })) as {
+              plans?: Array<unknown>;
+            };
+            if (plans.plans && plans.plans.length > 0) {
+              throw new Error(
+                `The product "${input.productId}" is associated with subscription plans, but you're using it with charge().\n` +
+                  `To create a one-time payment, please:\n` +
+                  `1. Go to your PayPal Dashboard → Products & Plans\n` +
+                  `2. Create a new product for one-time payments\n` +
+                  `3. Use the new product ID in charge()\n\n` +
+                  `Alternatively, if you want a recurring subscription, use pay.subscribe() instead of pay.charge().`
+              );
+            }
+          } catch (error) {
+            // If it's our validation error, re-throw it
+            if (
+              error instanceof Error &&
+              error.message.includes("associated with subscription plans")
+            ) {
+              throw error;
+            }
+            // For other errors, continue with product price extraction
+          }
+        }
 
         // Try to get price from product
         // PayPal product pricing structure can vary, so we'll try to extract it
@@ -309,6 +345,48 @@ export class PayPalProvider implements PaymentProvider {
   async subscribe(input: SubscribeInput): Promise<SubscriptionResult> {
     if (!input.email) {
       throw new Error("Email is required for PayPal subscriptions");
+    }
+
+    // Validate that the plan is configured for recurring billing
+    try {
+      const plan = (await this.request(
+        "GET",
+        `/v1/billing/plans/${input.plan}`
+      )) as {
+        id: string;
+        billing_cycles?: Array<{
+          tenure_type?: string;
+          frequency?: { interval_unit?: string; interval_count?: number };
+        }>;
+      };
+      if (
+        !plan.billing_cycles ||
+        plan.billing_cycles.length === 0 ||
+        !plan.billing_cycles.some(
+          (cycle) =>
+            cycle.tenure_type === "REGULAR" || cycle.tenure_type === "TRIAL"
+        )
+      ) {
+        throw new Error(
+          `The plan "${input.plan}" is not configured for recurring billing, but you're using it with subscribe().\n` +
+            `To create a subscription, please:\n` +
+            `1. Go to your PayPal Dashboard → Products & Plans\n` +
+            `2. Create a new subscription plan with billing cycles configured\n` +
+            `3. Set the billing frequency (monthly, yearly, etc.)\n` +
+            `4. Use the new subscription plan ID in subscribe()\n\n` +
+            `Alternatively, if you want a one-time payment, use pay.charge() instead of pay.subscribe().`
+        );
+      }
+    } catch (error) {
+      // If it's our validation error, re-throw it
+      if (
+        error instanceof Error &&
+        error.message.includes("not configured for recurring billing")
+      ) {
+        throw error;
+      }
+      // For other errors (network, invalid plan ID, etc.), let them propagate
+      // The API will handle them appropriately
     }
 
     // PayPal uses Subscriptions API

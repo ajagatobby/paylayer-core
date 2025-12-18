@@ -266,20 +266,20 @@ Each payment provider requires specific credentials and configuration. Choose yo
 
 **Required Variables:**
 
-| Variable                          | Description                             | Where to Find                                                                                          |
-| --------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `LEMONSQUEEZY_API_KEY`            | Your Lemon Squeezy API key              | [Lemon Squeezy Dashboard](https://app.lemonsqueezy.com/settings/api) → API Keys → Create API Key       |
-| `LEMONSQUEEZY_WEBHOOK_SECRET`     | Webhook signing secret                  | [Lemon Squeezy Dashboard](https://app.lemonsqueezy.com/settings/webhooks) → Webhook → Signing Secret   |
-| `LEMONSQUEEZY_STORE_ID`           | Your store ID                           | [Lemon Squeezy Dashboard](https://app.lemonsqueezy.com/stores) → Store → Copy Store ID                 |
-| `LEMONSQUEEZY_DEFAULT_VARIANT_ID` | Default variant ID for one-time charges | [Lemon Squeezy Dashboard](https://app.lemonsqueezy.com/products) → Product → Variant → Copy Variant ID |
+| Variable                      | Description                | Where to Find                                                                                        |
+| ----------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `LEMONSQUEEZY_API_KEY`        | Your Lemon Squeezy API key | [Lemon Squeezy Dashboard](https://app.lemonsqueezy.com/settings/api) → API Keys → Create API Key     |
+| `LEMONSQUEEZY_WEBHOOK_SECRET` | Webhook signing secret     | [Lemon Squeezy Dashboard](https://app.lemonsqueezy.com/settings/webhooks) → Webhook → Signing Secret |
+| `LEMONSQUEEZY_STORE_ID`       | Your store ID              | [Lemon Squeezy Dashboard](https://app.lemonsqueezy.com/stores) → Store → Copy Store ID               |
 
 **Optional Variables:**
 
-| Variable                       | Description                                | Default                                    |
-| ------------------------------ | ------------------------------------------ | ------------------------------------------ |
-| `LEMONSQUEEZY_BASE_URL`        | API base URL (usually not needed)          | `https://api.lemonsqueezy.com`             |
-| `LEMONSQUEEZY_TEST_MODE`       | Set to `"true"` for test mode (deprecated) | Use `PAYLAYER_ENVIRONMENT=sandbox` instead |
-| `LEMONSQUEEZY_PORTAL_BASE_URL` | Customer portal base URL                   | Auto-configured                            |
+| Variable                          | Description                                                                     | Default                                    |
+| --------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------ |
+| `LEMONSQUEEZY_BASE_URL`           | API base URL (usually not needed)                                               | `https://api.lemonsqueezy.com`             |
+| `LEMONSQUEEZY_DEFAULT_VARIANT_ID` | Default variant ID (required when using `amount` without `priceId`/`productId`) | None                                       |
+| `LEMONSQUEEZY_TEST_MODE`          | Set to `"true"` for test mode (deprecated)                                      | Use `PAYLAYER_ENVIRONMENT=sandbox` instead |
+| `LEMONSQUEEZY_PORTAL_BASE_URL`    | Customer portal base URL                                                        | Auto-configured                            |
 
 **Setup Steps:**
 
@@ -381,7 +381,8 @@ PAYLAYER_ENVIRONMENT=production
 LEMONSQUEEZY_API_KEY=YOUR_LEMONSQUEEZY_API_KEY_HERE
 LEMONSQUEEZY_WEBHOOK_SECRET=YOUR_LEMONSQUEEZY_WEBHOOK_SECRET_HERE
 LEMONSQUEEZY_STORE_ID=YOUR_STORE_ID_HERE
-LEMONSQUEEZY_DEFAULT_VARIANT_ID=YOUR_VARIANT_ID_HERE
+# Optional: Required when using charge() with only amount (no priceId/productId)
+# LEMONSQUEEZY_DEFAULT_VARIANT_ID=YOUR_VARIANT_ID_HERE
 ```
 
 #### Polar.sh Example
