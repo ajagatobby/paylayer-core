@@ -746,6 +746,16 @@ export function normalizeEvent(
   else if (providerName === "paddle" && event.data) {
     const data = event.data as Record<string, unknown>;
 
+    // Access raw event to check for included customer/transaction data
+    const rawPaddleEvent = rawEvent as {
+      data?: unknown;
+      included?: Array<{
+        type: string;
+        id: string;
+        attributes?: Record<string, unknown>;
+      }>;
+    } | null;
+
     // Check if this is a subscription event
     const isSubscriptionEvent = eventType.includes("subscription");
 
@@ -772,9 +782,11 @@ export function normalizeEvent(
         ) {
           const unitPrice = price.unit_price as Record<string, unknown>;
           if (typeof unitPrice.amount === "string") {
-            amount = parseFloat(unitPrice.amount);
+            // Paddle uses smallest currency unit (cents), convert to dollars
+            amount = parseFloat(unitPrice.amount) / 100;
           } else if (typeof unitPrice.amount === "number") {
-            amount = unitPrice.amount;
+            // Paddle uses smallest currency unit (cents), convert to dollars
+            amount = unitPrice.amount / 100;
           }
           if (typeof unitPrice.currency_code === "string") {
             currency = unitPrice.currency_code.toUpperCase() as CurrencyCode;
@@ -782,7 +794,8 @@ export function normalizeEvent(
         }
         // Fallback: check if price has amount/currency directly
         if (!amount && typeof price.amount === "number") {
-          amount = price.amount;
+          // Paddle uses smallest currency unit (cents), convert to dollars
+          amount = price.amount / 100;
         }
         if (!currency && typeof price.currency_code === "string") {
           currency = price.currency_code.toUpperCase() as CurrencyCode;
@@ -804,7 +817,8 @@ export function normalizeEvent(
 
     // Fallback to top-level fields if items not available or not subscription event
     if (amount === undefined) {
-      amount = typeof data.amount === "number" ? data.amount : undefined;
+      // Paddle uses smallest currency unit (cents), convert to dollars
+      amount = typeof data.amount === "number" ? data.amount / 100 : undefined;
     }
     if (!currency) {
       currency =
@@ -813,8 +827,89 @@ export function normalizeEvent(
           : undefined;
     }
 
+    // Extract email - check multiple possible locations
+    // Note: Paddle's subscription.created webhook typically doesn't include customer email
+    // It only provides customer_id. Email is usually available in transaction events or via API.
     email =
       typeof data.customer_email === "string" ? data.customer_email : undefined;
+
+    // Check if customer is an object with email property
+    if (!email && data.customer && typeof data.customer === "object") {
+      const customer = data.customer as Record<string, unknown>;
+      if (typeof customer.email === "string") {
+        email = customer.email;
+      }
+    }
+
+    // Check transaction object for customer email (Paddle sometimes includes transaction data)
+    if (!email && data.transaction && typeof data.transaction === "object") {
+      const transaction = data.transaction as Record<string, unknown>;
+      if (typeof transaction.customer_email === "string") {
+        email = transaction.customer_email;
+      }
+      // Check if transaction has customer object
+      if (
+        !email &&
+        transaction.customer &&
+        typeof transaction.customer === "object"
+      ) {
+        const txCustomer = transaction.customer as Record<string, unknown>;
+        if (typeof txCustomer.email === "string") {
+          email = txCustomer.email;
+        }
+      }
+    }
+
+    // Check raw event data structure for customer information
+    // Paddle webhooks may have customer data nested in the raw event
+    if (!email && rawPaddleEvent?.data) {
+      const rawData = rawPaddleEvent.data as Record<string, unknown>;
+      // Check if customer is directly in raw data
+      if (rawData.customer && typeof rawData.customer === "object") {
+        const rawCustomer = rawData.customer as Record<string, unknown>;
+        if (typeof rawCustomer.email === "string") {
+          email = rawCustomer.email;
+        }
+      }
+      // Check for customer_email in raw data
+      if (!email && typeof rawData.customer_email === "string") {
+        email = rawData.customer_email;
+      }
+    }
+
+    // Check raw event included resources for customer data (Paddle may include related objects)
+    if (
+      !email &&
+      rawPaddleEvent?.included &&
+      Array.isArray(rawPaddleEvent.included)
+    ) {
+      for (const resource of rawPaddleEvent.included) {
+        if (resource.type === "customer" && resource.attributes) {
+          if (typeof resource.attributes.email === "string") {
+            email = resource.attributes.email;
+            break;
+          }
+        }
+      }
+    }
+
+    // Check custom_data for email
+    if (!email && data.custom_data && typeof data.custom_data === "object") {
+      const customData = data.custom_data as Record<string, unknown>;
+      if (typeof customData.email === "string") {
+        email = customData.email;
+      }
+    }
+
+    // Check metadata for email
+    if (!email && data.metadata && typeof data.metadata === "object") {
+      const metadata = data.metadata as Record<string, unknown>;
+      if (typeof metadata.email === "string") {
+        email = metadata.email;
+      } else if (typeof metadata.customer_email === "string") {
+        email = metadata.customer_email;
+      }
+    }
 
     // Extract subscription ID - check multiple locations
     subscriptionId =
