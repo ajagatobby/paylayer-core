@@ -123,6 +123,16 @@ await pay.pause("sub_1234567890");
 await pay.resume("sub_1234567890");
 ```
 
+### Complete Example Application
+
+For a complete working example with Express.js integration, see the [PayLayer Express Example](https://github.com/ajagatobby/paylayer-core-example) repository. It includes:
+
+- Full Express.js application setup
+- Service layer architecture
+- Webhook handling implementation
+- All payment operations demonstrated
+- Ready-to-run code examples
+
 ---
 
 ## ⚙️ Configuration
