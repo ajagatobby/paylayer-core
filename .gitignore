@@ -80,3 +80,7 @@ lerna-debug.log*
 *.pem
 *.key
 *.cert
+
+DEPLOYMENT.md
+
+.npmignore
