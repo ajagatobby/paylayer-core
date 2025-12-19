@@ -55,6 +55,9 @@ interface PolarSubscription {
   price_id?: string;
   customer_id: string;
   currency?: string;
+  cancel_at_period_end?: boolean;
+  canceled_at?: string | null;
+  current_period_end?: string;
 }
 
 interface PolarCustomerSession {
@@ -114,26 +117,78 @@ export class PolarProvider implements PaymentProvider {
       url += `?${searchParams.toString()}`;
     }
 
-    const response = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
 
-    if (!response.ok) {
-      const error = await response
-        .json()
-        .catch(() => ({ message: "Unknown error" }));
-      throw new Error(
-        `Polar API error: ${response.status} - ${JSON.stringify(error)}`
-      );
+      if (!response.ok) {
+        const error = await response
+          .json()
+          .catch(() => ({ detail: "Unknown error" }));
+        throw new Error(
+          `Polar API error: ${response.status} - ${JSON.stringify(error)}`
+        );
+      }
+
+      return response.json() as Promise<T>;
+    } catch (error) {
+      // Handle network-level errors (fetch failures)
+      if (error instanceof Error) {
+        // Check for specific network error codes
+        if ("code" in error) {
+          const errorCode = (error as Error & { code?: string }).code;
+
+          if (errorCode === "ETIMEDOUT") {
+            throw new Error(
+              `Polar API connection timed out. Please check your network connection.\n` +
+                `Request URL: ${url}`
+            );
+          }
+
+          if (errorCode === "ECONNREFUSED") {
+            throw new Error(
+              `Polar API connection refused. The server is not accepting connections.\n` +
+                `Request URL: ${url}`
+            );
+          }
+
+          if (errorCode === "ENOTFOUND") {
+            throw new Error(
+              `Polar API hostname not found. DNS resolution failed.\n` +
+                `Request URL: ${url}`
+            );
+          }
+        }
+
+        // Check if error message contains fetch failed or network-related keywords
+        const errorMessage = error.message.toLowerCase();
+        if (
+          errorMessage.includes("fetch failed") ||
+          errorMessage.includes("network") ||
+          errorMessage.includes("timeout") ||
+          errorMessage.includes("timed out")
+        ) {
+          throw new Error(
+            `Polar API request failed: ${error.message}\n` +
+              `This usually indicates a network connectivity issue. Please verify:\n` +
+              `  - Your internet connection is working\n` +
+              `  - The API endpoint is reachable: ${url}\n` +
+              `  - No firewall or proxy is blocking the connection\n` +
+              `  - Your API key (POLAR_OAT or POLAR_ACCESS_TOKEN) is correctly configured`
+          );
+        }
+      }
+
+      // Re-throw if we couldn't categorize the error
+      throw error;
     }
-
-    return response.json() as Promise<T>;
   }
 
   /**
@@ -424,20 +479,53 @@ export class PolarProvider implements PaymentProvider {
   }
 
   async cancel(subscriptionId: string): Promise<SubscriptionResult> {
-    // Cancel subscription immediately
-    const response = await this.request<PolarSubscription>(
-      "POST",
-      `/subscriptions/${subscriptionId}/cancel`,
-      {
-        revoke_immediate: true,
+    // Cancel subscription immediately using DELETE endpoint
+    // First, get the subscription details before canceling
+    let subscription: PolarSubscription;
+    try {
+      subscription = await this.request<PolarSubscription>(
+        "GET",
+        `/subscriptions/${subscriptionId}`
+      );
+    } catch (error) {
+      // If subscription doesn't exist, throw a more helpful error
+      if (error instanceof Error && error.message.includes("404")) {
+        throw new Error(
+          `Subscription ${subscriptionId} not found. Please verify the subscription ID is correct.`
+        );
       }
-    );
+      throw error;
+    }
 
+    // Cancel subscription using DELETE method
+    // Polar API uses DELETE /v1/subscriptions/{id} to revoke subscriptions
+    const path = `/subscriptions/${subscriptionId}`;
+    const url = `${this.baseUrl}${path}`;
+
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        Accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response
+        .json()
+        .catch(() => ({ detail: "Not Found" }));
+      throw new Error(
+        `Polar API error: ${response.status} - ${JSON.stringify(error)}`
+      );
+    }
+
+    // DELETE may return empty body or subscription object
+    // We already have the subscription details from the GET request above
     return {
-      id: response.id,
+      id: subscription.id,
       status: "cancelled",
-      plan: response.product_id || "unknown",
-      currency: response.currency?.toUpperCase() || "USD",
+      plan: subscription.product_id || "unknown",
+      currency: subscription.currency?.toUpperCase() || "USD",
       provider: this.name,
     };
   }
@@ -462,22 +550,92 @@ export class PolarProvider implements PaymentProvider {
   }
 
   async resume(subscriptionId: string): Promise<SubscriptionResult> {
-    // Resume by setting cancel_at_period_end to false
-    const response = await this.request<PolarSubscription>(
-      "PATCH",
-      `/subscriptions/${subscriptionId}`,
-      {
-        cancel_at_period_end: false,
+    // First, get the subscription to check its current status
+    let subscription: PolarSubscription;
+    try {
+      subscription = await this.request<PolarSubscription>(
+        "GET",
+        `/subscriptions/${subscriptionId}`
+      );
+    } catch (error) {
+      // If subscription doesn't exist, throw a more helpful error
+      if (error instanceof Error) {
+        if (error.message.includes("404")) {
+          throw new Error(
+            `Subscription ${subscriptionId} not found. Please verify the subscription ID is correct. ` +
+              `If the subscription was permanently cancelled (deleted), it cannot be resumed.`
+          );
+        }
+        // Re-throw network errors with context
+        if (
+          error.message.includes("fetch failed") ||
+          error.message.includes("network") ||
+          error.message.includes("connection")
+        ) {
+          throw new Error(
+            `Failed to fetch subscription ${subscriptionId}: ${error.message}`
+          );
+        }
       }
-    );
+      throw error;
+    }
 
-    return {
-      id: response.id,
-      status: "active",
-      plan: response.product_id || "unknown",
-      currency: response.currency?.toUpperCase() || "USD",
-      provider: this.name,
-    };
+    // Check if subscription can be resumed
+    // If status is "canceled" (permanently cancelled), it cannot be resumed
+    if (
+      subscription.status === "canceled" ||
+      subscription.status === "cancelled"
+    ) {
+      throw new Error(
+        `Cannot resume subscription ${subscriptionId}: subscription is permanently cancelled. ` +
+          `Permanently cancelled subscriptions cannot be resumed. You may need to create a new subscription.`
+      );
+    }
+
+    // Check if subscription is already active and not scheduled to cancel
+    // If cancel_at_period_end is false or undefined, the subscription is already active
+    if (
+      subscription.cancel_at_period_end === false ||
+      subscription.cancel_at_period_end === undefined
+    ) {
+      // Subscription is already active, return current state
+      return {
+        id: subscription.id,
+        status: "active",
+        plan: subscription.product_id || "unknown",
+        currency: subscription.currency?.toUpperCase() || "USD",
+        provider: this.name,
+      };
+    }
+
+    // Resume by setting cancel_at_period_end to false
+    // This works if the subscription is scheduled to cancel (cancel_at_period_end is true)
+    try {
+      const response = await this.request<PolarSubscription>(
+        "PATCH",
+        `/subscriptions/${subscriptionId}`,
+        {
+          cancel_at_period_end: false,
+        }
+      );
+
+      return {
+        id: response.id,
+        status: "active",
+        plan: response.product_id || "unknown",
+        currency: response.currency?.toUpperCase() || "USD",
+        provider: this.name,
+      };
+    } catch (error) {
+      // Handle 410 error specifically
+      if (error instanceof Error && error.message.includes("410")) {
+        throw new Error(
+          `Cannot resume subscription ${subscriptionId}: subscription is no longer available for resuming. ` +
+            `This typically means the subscription was permanently cancelled or is in a state that cannot be resumed.`
+        );
+      }
+      throw error;
+    }
   }
 
   async portal(email: string): Promise<string> {
