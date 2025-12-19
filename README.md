@@ -436,6 +436,14 @@ res.redirect(portalUrl);
 
 Webhooks allow payment providers to notify your application about payment events in real-time. PayLayer normalizes all webhook events to a consistent format.
 
+### How It Works
+
+The webhook system works in three steps:
+
+1. **Register event handlers** - Define what happens when events occur
+2. **Process incoming webhooks** - `webhook.process()` verifies, normalizes, and triggers handlers
+3. **Handlers execute** - Your registered callbacks run with the normalized event
+
 ### Setup
 
 1. **Register event handlers** before processing webhook requests:
@@ -500,6 +508,58 @@ app.post(
   }
 );
 ```
+
+### Understanding `webhook.process()`
+
+The `webhook.process(request)` method handles the entire webhook processing flow:
+
+**What it does:**
+
+1. **Verifies the signature** - Validates the webhook request is authentic using the provider's signing secret
+2. **Normalizes the event** - Converts provider-specific events (e.g., Stripe's `payment_intent.succeeded`) to PayLayer's unified format (e.g., `payment.success`)
+3. **Triggers registered handlers** - Automatically calls all handlers registered for that event type
+4. **Returns a response** - Provides status and body for your HTTP response
+
+**Return Value:**
+
+```typescript
+{
+  status: number; // 200 for success, 401 for invalid signature
+  body: {
+    received: boolean;
+  }
+}
+```
+
+**Example Flow:**
+
+```typescript
+// 1. Provider sends webhook to your endpoint
+POST /webhooks/paylayer
+{
+  "type": "payment_intent.succeeded",  // Stripe-specific format
+  "data": { ... }
+}
+
+// 2. webhook.process() is called
+const result = await webhook.process(req);
+
+// 3. Internally, PayLayer:
+//    - Verifies signature ✓
+//    - Normalizes to: { type: "payment.success", ... }
+//    - Finds handlers registered with webhook.onPaymentSuccess()
+//    - Executes all registered handlers asynchronously
+
+// 4. Returns response
+//    { status: 200, body: { received: true } }
+```
+
+**Important Notes:**
+
+- Handlers are executed **asynchronously** - `webhook.process()` doesn't wait for handlers to complete
+- Multiple handlers can be registered for the same event type - all will be called
+- Handler errors are caught and logged, but don't affect the webhook response
+- Invalid signatures return `401` status - handlers are not executed
 
 3. **Configure webhook URL in provider dashboard:**
    - Point to `https://yourdomain.com/webhooks/paylayer`
