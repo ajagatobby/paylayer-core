@@ -1,6 +1,6 @@
 {
   "name": "@paylayer/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Provider agnostic payments SDK for one-time payments, subscriptions, and webhooks.",
   "license": "MIT",
   "author": "PayLayer",
