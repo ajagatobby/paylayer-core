@@ -842,15 +842,41 @@ All providers are fully implemented with proper webhook verification, error hand
 2. **Get your API key:**
    - Go to [Paddle Dashboard → Developer Tools → Authentication](https://vendors.paddle.com/authentication)
    - Create an API key and copy it
-3. **Create prices:**
+3. **Get your Client-Side Token:**
+   - Go to [Paddle Dashboard → Developer Tools → Authentication](https://vendors.paddle.com/authentication)
+   - Copy your **Client-Side Token** (different from the API key)
+4. **Create prices:**
    - Go to [Paddle Dashboard → Catalog](https://vendors.paddle.com/catalog)
    - Create products and prices
    - Copy the **Price ID** (starts with `pri_`)
    - Use this Price ID as the `plan` parameter in `pay.subscribe()`
-4. **Set up webhooks:**
+5. **Set up webhooks:**
    - Go to [Paddle Dashboard → Developer Tools → Notifications](https://vendors.paddle.com/notifications)
    - Add a webhook endpoint: `https://yourdomain.com/webhooks/paylayer`
    - Copy the **Signing secret**
+6. **Configure Default Payment Link:**
+   - Go to [Paddle Dashboard → Checkout → Checkout Settings → General](https://vendors.paddle.com/checkout/settings)
+   - Set **Default Payment Link** to the URL of your checkout page (e.g., `https://yourdomain.com/checkout`)
+   - Ensure the domain is approved in **Checkout → Website Approval → Domain Approval**
+7. **Add Paddle.js to your checkout page:**
+
+   The page at your Default Payment Link must include and initialize Paddle.js. Add this to your checkout page HTML:
+
+   ```html
+   <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+   <script>
+     Paddle.Environment.set("sandbox"); // Use "production" for live mode
+     Paddle.Initialize({
+       token: "test_YOUR_CLIENT_SIDE_TOKEN", // Use your actual client-side token
+     });
+   </script>
+   ```
+
+   **Important Notes:**
+   - Replace `test_YOUR_CLIENT_SIDE_TOKEN` with your actual client-side token from the Paddle Dashboard
+   - Use `"sandbox"` for testing, `"production"` for live mode
+   - The checkout page must handle the `_ptxn` query parameter that Paddle appends to the URL
+   - Paddle.js will automatically open the checkout overlay when the page loads with a transaction ID
 
 ### PayPal Setup
 

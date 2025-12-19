@@ -18,7 +18,13 @@ interface PaddleTransactionResponse {
     id: string;
     status: string;
     currency_code: string;
-    totals: {
+    details?: {
+      totals?: {
+        grand_total: string;
+        currency_code: string;
+      };
+    };
+    totals?: {
       total: string;
       currency_code: string;
     };
@@ -127,6 +133,32 @@ export class PaddleProvider implements PaymentProvider {
       const error = await response
         .json()
         .catch(() => ({ message: "Unknown error" }));
+
+      // Check for specific Paddle error codes and provide helpful messages
+      if (typeof error === "object" && error !== null && "error" in error) {
+        const paddleError = error as {
+          error?: {
+            code?: string;
+            detail?: string;
+            type?: string;
+          };
+        };
+
+        if (
+          paddleError.error?.code === "transaction_default_checkout_url_not_set"
+        ) {
+          throw new Error(
+            `Paddle configuration error: A Default Payment Link has not been set in your Paddle Dashboard.\n` +
+              `To fix this:\n` +
+              `1. Go to your Paddle Dashboard → Settings → Checkout Settings\n` +
+              `2. Set up a Default Payment Link\n` +
+              `3. Save your changes\n` +
+              `4. Try your request again\n\n` +
+              `For more information, visit: https://developer.paddle.com/v1/errors/transactions/transaction_default_checkout_url_not_set`
+          );
+        }
+      }
+
       throw new Error(
         `Paddle API error: ${response.status} - ${JSON.stringify(error)}`
       );
@@ -143,21 +175,26 @@ export class PaddleProvider implements PaymentProvider {
     if (input.productId) {
       // Product ID - fetch product and use its first price
       // Note: Paddle API requires fetching the product to get its prices
+      // Include prices in the response using the include query parameter
       const product = (await this.request(
         "GET",
-        `/products/${input.productId}`
+        `/products/${input.productId}`,
+        undefined,
+        { include: "prices" }
       )) as {
-        id: string;
-        prices?: Array<{ id: string }>;
+        data: {
+          id: string;
+          prices?: Array<{ id: string }>;
+        };
       };
 
-      if (!product.prices || product.prices.length === 0) {
+      if (!product.data.prices || product.data.prices.length === 0) {
         throw new Error(
           `No prices found for product "${input.productId}". Please ensure the product has at least one price configured.`
         );
       }
 
-      priceId = product.prices[0].id;
+      priceId = product.data.prices[0].id;
 
       // Validate that the price is one-time (not recurring)
       try {
@@ -230,26 +267,68 @@ export class PaddleProvider implements PaymentProvider {
       }
     }
 
-    // Create a transaction with automatic collection mode
-    // The checkout URL will be available in response.data.checkout?.url
-    const response = (await this.request("POST", "/transactions", {
+    // Create a transaction - Paddle will use the Default Payment Link from dashboard
+    // Don't set checkout.url to ensure we use Paddle's default payment link
+    const transactionPayload: Record<string, unknown> = {
       items: [
         {
           price_id: priceId,
           quantity: 1,
         },
       ],
-      currency_code: input.currency,
-      customer_email: input.email,
-      collection_mode: "automatic",
       custom_data: {
         paylayer_provider: this.name,
         amount: input.amount?.toString() || "0",
       },
-    })) as PaddleTransactionResponse;
+    };
+
+    // Use customer object format if email is provided
+    if (input.email) {
+      transactionPayload.customer = {
+        email: input.email,
+      };
+    }
+
+    // Set currency if provided
+    if (input.currency) {
+      transactionPayload.currency_code = input.currency;
+    }
+
+    const response = (await this.request(
+      "POST",
+      "/transactions",
+      transactionPayload
+    )) as PaddleTransactionResponse;
 
     // Extract checkout URL from response
     const checkoutUrl = response.data.checkout?.url;
+
+    if (!checkoutUrl) {
+      throw new Error(
+        `No checkout URL returned from Paddle. This usually means:\n` +
+          `1. Your Paddle account doesn't have a Default Payment Link configured\n` +
+          `2. The domain in your Default Payment Link hasn't been approved\n` +
+          `3. The checkout page doesn't have Paddle.js properly configured\n\n` +
+          `To fix this:\n` +
+          `1. Go to Paddle Dashboard → Checkout → Checkout Settings → General\n` +
+          `2. Set a Default Payment Link (a page on your site with Paddle.js)\n` +
+          `3. Ensure the domain is approved in Checkout → Website Approval → Domain Approval\n` +
+          `4. Make sure your checkout page includes Paddle.js and handles the _ptxn parameter\n\n` +
+          `Transaction ID: ${response.data.id}`
+      );
+    }
+
+    // Extract amount and currency from response
+    // Paddle API may return totals in details.totals or directly in totals
+    const totals = response.data.details?.totals || response.data.totals;
+    const amount = totals?.grand_total
+      ? parseFloat(totals.grand_total)
+      : totals?.total
+        ? parseFloat(totals.total)
+        : 0;
+    const currency = totals?.currency_code
+      ? totals.currency_code.toUpperCase()
+      : response.data.currency_code.toUpperCase();
 
     return {
       id: response.data.id,
@@ -260,8 +339,8 @@ export class PaddleProvider implements PaymentProvider {
           : response.data.status === "failed"
             ? "failed"
             : "pending",
-      amount: parseFloat(response.data.totals.total),
-      currency: response.data.totals.currency_code.toUpperCase(),
+      amount,
+      currency,
       provider: this.name,
       email: input.email,
     };
@@ -308,24 +387,41 @@ export class PaddleProvider implements PaymentProvider {
     // Instead, create a transaction with a recurring price
     // The subscription will be created automatically when the customer completes checkout
     // The plan should be a Paddle price ID with recurring billing
-    const response = (await this.request("POST", "/transactions", {
+    // Don't set checkout.url to ensure we use Paddle's default payment link
+    const subscriptionPayload: Record<string, unknown> = {
       items: [
         {
           price_id: input.plan, // Plan must be a Paddle price ID with recurring billing
           quantity: 1,
         },
       ],
-      customer_email: input.email,
-      currency_code: input.currency,
-      collection_mode: "automatic",
       custom_data: {
         paylayer_provider: this.name,
         paylayer_plan: input.plan,
       },
-    })) as PaddleTransactionResponse;
+    };
+
+    // Use customer object format
+    if (input.email) {
+      subscriptionPayload.customer = {
+        email: input.email,
+      };
+    }
+
+    // Set currency if provided
+    if (input.currency) {
+      subscriptionPayload.currency_code = input.currency;
+    }
+
+    const response = (await this.request(
+      "POST",
+      "/transactions",
+      subscriptionPayload
+    )) as PaddleTransactionResponse;
 
     // Extract checkout URL from response
     const checkoutUrl = response.data.checkout?.url;
+
     // The actual subscription will be created via webhook after checkout completion
     // For now, we return the transaction ID as a temporary subscription ID
     // The webhook handler should update this when the subscription is created
@@ -360,26 +456,122 @@ export class PaddleProvider implements PaymentProvider {
   }
 
   async pause(subscriptionId: string): Promise<SubscriptionResult> {
-    // Paddle doesn't have a direct pause - cancel at period end
-    return this.cancel(subscriptionId);
-  }
-
-  async resume(subscriptionId: string): Promise<SubscriptionResult> {
-    // Paddle doesn't support resume - fetch current subscription status
+    // Paddle supports pausing subscriptions via POST /subscriptions/{id}/pause
+    // This will pause the subscription immediately
     const response = (await this.request(
-      "GET",
-      `/subscriptions/${subscriptionId}`
+      "POST",
+      `/subscriptions/${subscriptionId}/pause`,
+      {
+        effective_from: "immediately",
+      }
     )) as PaddleSubscriptionResponse;
 
-    if (response.data.status === "canceled") {
-      throw new Error(
-        "Cannot resume a canceled subscription. Create a new subscription instead."
-      );
+    // Map Paddle subscription status to our normalized status
+    const responseStatus = response.data.status.toLowerCase();
+    let status: "active" | "paused" | "cancelled" = "paused";
+    if (responseStatus === "canceled" || responseStatus === "cancelled") {
+      status = "cancelled";
+    } else if (responseStatus === "paused") {
+      status = "paused";
+    } else if (responseStatus === "active") {
+      status = "active";
     }
 
     return {
       id: response.data.id,
-      status: response.data.status === "active" ? "active" : "active",
+      status,
+      plan: response.data.items[0]?.price.id || "unknown",
+      currency: response.data.currency_code.toUpperCase(),
+      provider: this.name,
+    };
+  }
+
+  async resume(subscriptionId: string): Promise<SubscriptionResult> {
+    // First, check the current subscription status to provide better error messages
+    let currentSubscription: PaddleSubscriptionResponse;
+    try {
+      currentSubscription = (await this.request(
+        "GET",
+        `/subscriptions/${subscriptionId}`
+      )) as PaddleSubscriptionResponse;
+    } catch (error) {
+      throw new Error(
+        `Failed to fetch subscription ${subscriptionId}: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+    }
+
+    const currentStatus = currentSubscription.data.status.toLowerCase();
+
+    // Check if subscription can be resumed
+    if (currentStatus === "canceled" || currentStatus === "cancelled") {
+      throw new Error(
+        `Cannot resume a canceled subscription (${subscriptionId}).\n\n` +
+          `Paddle does not allow resuming canceled subscriptions. Once a subscription is canceled, ` +
+          `it cannot be reactivated.\n\n` +
+          `To restore service for this customer:\n` +
+          `1. Create a new subscription using pay.subscribe() with the same plan\n` +
+          `2. Use the customer's email and the same price ID\n\n` +
+          `Note: If you want to temporarily suspend a subscription with the ability to resume it later, ` +
+          `use pay.pause() instead of pay.cancel(). Paused subscriptions can be resumed using pay.resume().`
+      );
+    }
+
+    if (currentStatus === "active") {
+      // Subscription is already active, return current status
+      return {
+        id: currentSubscription.data.id,
+        status: "active",
+        plan: currentSubscription.data.items[0]?.price.id || "unknown",
+        currency: currentSubscription.data.currency_code.toUpperCase(),
+        provider: this.name,
+      };
+    }
+
+    // Paddle supports resuming paused subscriptions via POST /subscriptions/{id}/resume
+    // This will immediately reactivate the subscription and charge the customer
+    // The request body must include effective_from field
+    let response: PaddleSubscriptionResponse;
+    try {
+      response = (await this.request(
+        "POST",
+        `/subscriptions/${subscriptionId}/resume`,
+        {
+          effective_from: "immediately",
+        }
+      )) as PaddleSubscriptionResponse;
+    } catch (error) {
+      // Provide helpful error message if resume fails
+      if (error instanceof Error) {
+        if (
+          error.message.includes("not paused") ||
+          error.message.includes("cannot be resumed")
+        ) {
+          throw new Error(
+            `Cannot resume subscription ${subscriptionId}. Current status: ${currentStatus}. ` +
+              `Only paused subscriptions can be resumed.`
+          );
+        }
+        throw new Error(
+          `Failed to resume subscription ${subscriptionId}: ${error.message}`
+        );
+      }
+      throw error;
+    }
+
+    // Map Paddle subscription status to our normalized status
+    const responseStatus = response.data.status.toLowerCase();
+    let status: "active" | "paused" | "cancelled" = "active";
+    if (responseStatus === "canceled" || responseStatus === "cancelled") {
+      status = "cancelled";
+    } else if (responseStatus === "paused") {
+      status = "paused";
+    } else if (responseStatus === "active") {
+      status = "active";
+    }
+
+    return {
+      id: response.data.id,
+      status,
       plan: response.data.items[0]?.price.id || "unknown",
       currency: response.data.currency_code.toUpperCase(),
       provider: this.name,
