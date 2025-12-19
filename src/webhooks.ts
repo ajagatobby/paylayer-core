@@ -163,6 +163,15 @@ export function onSubscriptionResumed(handler: EventHandler): void {
 export interface WebhookRequest {
   body: unknown;
   headers: Record<string, string> | string[][] | { [key: string]: string };
+  rawBody?: string | Buffer;
+}
+
+interface ExpressRequest {
+  body: unknown;
+  headers:
+    | Record<string, string | string[] | undefined>
+    | { [key: string]: string | string[] | undefined };
+  rawBody?: string | Buffer;
 }
 
 /**
@@ -186,9 +195,37 @@ export interface WebhookRequest {
  * });
  * ```
  */
+function normalizeExpressHeaders(
+  headers:
+    | Record<string, string | string[] | undefined>
+    | { [key: string]: string | string[] | undefined }
+): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (value !== undefined) {
+      normalized[key] = Array.isArray(value) ? value[0] : String(value);
+    }
+  }
+  return normalized;
+}
+
+function isExpressRequest(req: unknown): req is ExpressRequest {
+  if (typeof req !== "object" || req === null) {
+    return false;
+  }
+
+  const hasBody = "body" in req;
+  const hasHeaders =
+    "headers" in req && typeof (req as any).headers === "object";
+  const hasJson = "json" in req && typeof (req as any).json === "function";
+
+  return hasBody && hasHeaders && !hasJson;
+}
+
 export async function webhook(
   req:
     | WebhookRequest
+    | ExpressRequest
     | {
         json(): Promise<unknown>;
         headers:
@@ -197,30 +234,42 @@ export async function webhook(
           | { [key: string]: string };
       }
 ): Promise<{ status: number; body: { received: boolean } }> {
-  const providerName = getProviderFromRequest(req);
+  let normalizedReq: WebhookRequest;
+
+  if (isExpressRequest(req)) {
+    normalizedReq = {
+      body: req.body,
+      headers: normalizeExpressHeaders(req.headers),
+      rawBody: req.rawBody,
+    };
+  } else {
+    normalizedReq = req as WebhookRequest;
+  }
+
+  const providerName = getProviderFromRequest(normalizedReq);
   const provider = getProvider();
 
   let rawEvent: unknown;
   let rawPayload: string | Buffer;
 
-  if ("json" in req && typeof req.json === "function") {
-    rawEvent = await req.json();
+  if ("json" in normalizedReq && typeof normalizedReq.json === "function") {
+    rawEvent = await normalizedReq.json();
     rawPayload = JSON.stringify(rawEvent);
-  } else if ("body" in req) {
-    rawEvent = req.body;
-    if ("rawBody" in req && typeof (req as any).rawBody === "string") {
-      rawPayload = (req as any).rawBody;
-    } else if (typeof req.body === "string") {
-      rawPayload = req.body;
+  } else if ("body" in normalizedReq) {
+    rawEvent = normalizedReq.body;
+    if (normalizedReq.rawBody) {
+      rawPayload = normalizedReq.rawBody;
+    } else if (typeof normalizedReq.body === "string") {
+      rawPayload = normalizedReq.body;
     } else {
-      rawPayload = Buffer.from(JSON.stringify(req.body));
+      rawPayload = Buffer.from(JSON.stringify(normalizedReq.body));
     }
   } else {
     throw new Error("Invalid webhook request: missing body or json method");
   }
 
-  const signature = getSignatureFromRequest(req, providerName);
-  const allHeaders = extractAllHeaders(req);
+  const signature = getSignatureFromRequest(normalizedReq, providerName);
+  const allHeaders = extractAllHeaders(normalizedReq);
   const webhookSecret = getWebhookSecret(providerName);
 
   if (webhookSecret && signature) {
@@ -264,16 +313,7 @@ export async function webhook(
   };
 }
 
-function getProviderFromRequest(
-  req:
-    | WebhookRequest
-    | {
-        headers:
-          | Record<string, string>
-          | string[][]
-          | { [key: string]: string };
-      }
-): Provider {
+function getProviderFromRequest(req: WebhookRequest): Provider {
   const envProvider = process.env.PAYLAYER_PROVIDER;
   if (envProvider) {
     return envProvider;
@@ -311,16 +351,7 @@ function getProviderFromRequest(
   return "mock";
 }
 
-function extractAllHeaders(
-  req:
-    | WebhookRequest
-    | {
-        headers:
-          | Record<string, string>
-          | string[][]
-          | { [key: string]: string };
-      }
-): Record<string, string> {
+function extractAllHeaders(req: WebhookRequest): Record<string, string> {
   const headers = "headers" in req ? req.headers : {};
   const normalized: Record<string, string> = {};
 
@@ -339,14 +370,7 @@ function extractAllHeaders(
 }
 
 function getSignatureFromRequest(
-  req:
-    | WebhookRequest
-    | {
-        headers:
-          | Record<string, string>
-          | string[][]
-          | { [key: string]: string };
-      },
+  req: WebhookRequest,
   providerName: Provider
 ): string {
   const headers = "headers" in req ? req.headers : {};
