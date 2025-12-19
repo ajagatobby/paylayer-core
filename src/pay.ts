@@ -32,9 +32,6 @@ import { getProvider } from "./providers/factory.js";
  * ```
  */
 async function charge(input: ChargeInput): Promise<ChargeResult> {
-  // Validate required fields
-  // Note: For Polar, only productId is supported (amount and priceId are not supported)
-  // For other providers, either amount or priceId must be provided
   if (!input.amount && !input.priceId && !input.productId) {
     throw new Error("Either amount, priceId, or productId must be provided");
   }
@@ -65,7 +62,6 @@ async function charge(input: ChargeInput): Promise<ChargeResult> {
  * ```
  */
 async function subscribe(input: SubscribeInput): Promise<SubscriptionResult> {
-  // Validate required fields
   if (!input.plan) {
     throw new Error("Plan is required");
   }

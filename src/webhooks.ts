@@ -197,22 +197,17 @@ export async function webhook(
           | { [key: string]: string };
       }
 ): Promise<{ status: number; body: { received: boolean } }> {
-  // Get provider from environment or request headers
   const providerName = getProviderFromRequest(req);
   const provider = getProvider();
 
-  // Extract raw event from request body
   let rawEvent: unknown;
   let rawPayload: string | Buffer;
 
   if ("json" in req && typeof req.json === "function") {
     rawEvent = await req.json();
-    // For signature verification, we need the raw body
-    // In Express, you'd need to use raw body middleware
     rawPayload = JSON.stringify(rawEvent);
   } else if ("body" in req) {
     rawEvent = req.body;
-    // Check if rawBody is provided (from Express raw body middleware)
     if ("rawBody" in req && typeof (req as any).rawBody === "string") {
       rawPayload = (req as any).rawBody;
     } else if (typeof req.body === "string") {
@@ -224,14 +219,10 @@ export async function webhook(
     throw new Error("Invalid webhook request: missing body or json method");
   }
 
-  // Get signature from headers
   const signature = getSignatureFromRequest(req, providerName);
-
-  // Extract all headers for providers that need them (e.g., PayPal)
   const allHeaders = extractAllHeaders(req);
-
-  // Verify webhook signature using provider-specific verification
   const webhookSecret = getWebhookSecret(providerName);
+
   if (webhookSecret && signature) {
     const isValid = await provider.verifyWebhook(
       rawPayload,
@@ -247,19 +238,14 @@ export async function webhook(
     }
   }
 
-  // Normalize the event using provider-specific normalization
   const normalizedEvent = normalizeEvent(providerName, rawEvent);
-
-  // Trigger registered handlers for this event type
   const eventHandlers = handlers.get(normalizedEvent.type) || [];
 
-  // Execute all handlers (fire and forget - don't wait for them)
   Promise.all(
     eventHandlers.map(async (handler) => {
       try {
         await handler(normalizedEvent);
       } catch (error) {
-        // Log error but don't fail the webhook
         // eslint-disable-next-line no-console
         console.error(
           `Error in webhook handler for ${normalizedEvent.type}:`,
@@ -272,19 +258,12 @@ export async function webhook(
     console.error("Error executing webhook handlers:", error);
   });
 
-  // Always return 200 if webhook is accepted
   return {
     status: 200,
     body: { received: true },
   };
 }
 
-/**
- * Gets the provider identifier from the request
- *
- * @param req - Webhook request
- * @returns Provider identifier
- */
 function getProviderFromRequest(
   req:
     | WebhookRequest
@@ -295,18 +274,13 @@ function getProviderFromRequest(
           | { [key: string]: string };
       }
 ): Provider {
-  // Try to get provider from environment first
   const envProvider = process.env.PAYLAYER_PROVIDER;
   if (envProvider) {
     return envProvider;
   }
 
-  // Try to infer from request headers
   const headers = "headers" in req ? req.headers : {};
-
-  // Check for provider-specific headers
   if (Array.isArray(headers)) {
-    // Headers as array of tuples
     const headerMap = new Map(headers as [string, string][]);
     if (headerMap.has("stripe-signature")) return "stripe";
     if (headerMap.has("paddle-signature")) return "paddle";
@@ -318,7 +292,6 @@ function getProviderFromRequest(
     if (headerMap.has("X-Signature")) return "lemonsqueezy";
     if (headerMap.has("x-polar-signature")) return "polar";
   } else {
-    // Headers as object
     const headerObj = headers as Record<string, string>;
     const lowerHeaders: Record<string, string> = {};
     for (const key in headerObj) {
@@ -335,13 +308,9 @@ function getProviderFromRequest(
     if (lowerHeaders["x-polar-signature"]) return "polar";
   }
 
-  // Default to mock if no provider detected
   return "mock";
 }
 
-/**
- * Extracts all headers from the request as a normalized object
- */
 function extractAllHeaders(
   req:
     | WebhookRequest
@@ -356,12 +325,10 @@ function extractAllHeaders(
   const normalized: Record<string, string> = {};
 
   if (Array.isArray(headers)) {
-    // Headers as array of tuples
     for (const [key, value] of headers as [string, string][]) {
       normalized[key.toLowerCase()] = value;
     }
   } else {
-    // Headers as object
     const headerObj = headers as Record<string, string>;
     for (const key in headerObj) {
       normalized[key.toLowerCase()] = headerObj[key];
@@ -371,9 +338,6 @@ function extractAllHeaders(
   return normalized;
 }
 
-/**
- * Gets the signature from the request headers
- */
 function getSignatureFromRequest(
   req:
     | WebhookRequest
@@ -389,7 +353,7 @@ function getSignatureFromRequest(
   const signatureHeaders: Record<string, string> = {
     stripe: "stripe-signature",
     paddle: "paddle-signature",
-    paypal: "paypal-transmission-sig", // PayPal uses PAYPAL-TRANSMISSION-SIG for signature
+    paypal: "paypal-transmission-sig",
     lemonsqueezy: "X-Signature",
     polar: "x-polar-signature",
   };
@@ -412,15 +376,11 @@ function getSignatureFromRequest(
   }
 }
 
-/**
- * Gets the webhook secret for the provider
- * For PayPal, this returns the webhook ID (not a secret)
- */
 function getWebhookSecret(providerName: Provider): string {
   const secretEnvVars: Record<string, string> = {
     stripe: "STRIPE_WEBHOOK_SECRET",
     paddle: "PADDLE_WEBHOOK_SECRET",
-    paypal: "PAYPAL_WEBHOOK_ID", // PayPal uses webhook ID, not secret
+    paypal: "PAYPAL_WEBHOOK_ID",
     lemonsqueezy: "LEMONSQUEEZY_WEBHOOK_SECRET",
     polar: "POLAR_WEBHOOK_SECRET",
   };

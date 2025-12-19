@@ -138,7 +138,6 @@ export class StripeProvider implements PaymentProvider {
     }
     this.apiKey = apiKey;
 
-    // Validate environment mode matches API key type
     const sandboxMode = isSandbox(this.name);
     const isTestKey = apiKey.startsWith("sk_test_");
     const isLiveKey = apiKey.startsWith("sk_live_");
@@ -171,14 +170,12 @@ export class StripeProvider implements PaymentProvider {
       }
 
       if (typeof value === "object" && !Array.isArray(value)) {
-        // Recursively handle nested objects
         this.appendNestedObject(
           formData,
           fullKey,
           value as Record<string, unknown>
         );
       } else if (Array.isArray(value)) {
-        // Handle arrays within nested objects
         if (value.length > 0 && typeof value[0] === "string") {
           for (const item of value) {
             formData.append(`${fullKey}[]`, String(item));
@@ -190,7 +187,6 @@ export class StripeProvider implements PaymentProvider {
           }
         }
       } else {
-        // Primitive value
         formData.append(fullKey, String(value));
       }
     }
@@ -210,11 +206,9 @@ export class StripeProvider implements PaymentProvider {
     let body: string | undefined;
     if (params && Object.keys(params).length > 0) {
       if (method === "GET") {
-        // For GET requests, append params as query string
         const queryParams = new URLSearchParams();
         for (const [key, value] of Object.entries(params)) {
           if (Array.isArray(value)) {
-            // Handle array parameters like lookup_keys[]
             for (const item of value) {
               queryParams.append(`${key}[]`, String(item));
             }
@@ -235,11 +229,9 @@ export class StripeProvider implements PaymentProvider {
 
         return response.json() as Promise<T>;
       } else {
-        // For POST requests, use form-encoded body
         headers["Content-Type"] = "application/x-www-form-urlencoded";
         const formData = new URLSearchParams();
         for (const [key, value] of Object.entries(params)) {
-          // Handle empty strings explicitly (for clearing fields like pause_collection)
           if (value === "") {
             formData.append(key, "");
             continue;
@@ -250,12 +242,9 @@ export class StripeProvider implements PaymentProvider {
           }
 
           if (typeof value === "object" && !Array.isArray(value)) {
-            // Handle nested objects (like metadata, subscription_data, etc.)
-            // Check if it's an empty object (for clearing fields)
             if (Object.keys(value as Record<string, unknown>).length === 0) {
               formData.append(key, "");
             } else {
-              // Check if this object contains nested objects or just primitive values
               const hasNestedObjects = Object.values(
                 value as Record<string, unknown>
               ).some(
@@ -263,14 +252,12 @@ export class StripeProvider implements PaymentProvider {
               );
 
               if (hasNestedObjects) {
-                // Use recursive appendNestedObject for deeply nested structures
                 this.appendNestedObject(
                   formData,
                   key,
                   value as Record<string, unknown>
                 );
               } else {
-                // Simple nested object with only primitive values (like simple metadata)
                 for (const [nestedKey, nestedValue] of Object.entries(
                   value as Record<string, unknown>
                 )) {
@@ -279,16 +266,11 @@ export class StripeProvider implements PaymentProvider {
               }
             }
           } else if (Array.isArray(value)) {
-            // Handle arrays
             if (value.length > 0 && typeof value[0] === "string") {
-              // Array of strings (like expand parameter)
-              // Stripe expects expand[]=value1&expand[]=value2 format
               for (const item of value) {
                 formData.append(`${key}[]`, String(item));
               }
             } else {
-              // Array of objects (like line_items)
-              // Need to handle nested objects recursively
               for (let i = 0; i < value.length; i++) {
                 const item = value[i] as Record<string, unknown>;
                 this.appendNestedObject(formData, `${key}[${i}]`, item);
@@ -359,7 +341,6 @@ export class StripeProvider implements PaymentProvider {
    * @returns Charge result with Checkout Session ID, URL, and status
    */
   async charge(input: ChargeInput): Promise<ChargeResult> {
-    // Prioritize input URLs over environment variables
     const successUrl =
       input.successUrl ??
       process.env.PAYLAYER_SUCCESS_URL ??
@@ -371,7 +352,6 @@ export class StripeProvider implements PaymentProvider {
       process.env.STRIPE_CHECKOUT_CANCEL_URL ??
       "https://app.example.com/cancel";
 
-    // Build line items based on whether productId, priceId, or amount is provided
     let lineItems: Array<{
       price?: string;
       price_data?: {
@@ -383,7 +363,6 @@ export class StripeProvider implements PaymentProvider {
     }>;
 
     if (input.productId) {
-      // Product ID - find one-time price for this product
       const prices = await this.request<StripePriceList>("GET", "/v1/prices", {
         product: input.productId,
         type: "one_time",
@@ -403,7 +382,6 @@ export class StripeProvider implements PaymentProvider {
         },
       ];
     } else if (input.priceId) {
-      // Validate that the price is one-time (not recurring)
       try {
         const price = await this.request<StripePrice>(
           "GET",
@@ -420,18 +398,14 @@ export class StripeProvider implements PaymentProvider {
           );
         }
       } catch (error) {
-        // If it's our validation error, re-throw it
         if (
           error instanceof Error &&
           error.message.includes("configured as a recurring subscription")
         ) {
           throw error;
         }
-        // For other errors (network, invalid price ID, etc.), let them propagate
-        // The API will handle them appropriately
       }
 
-      // Use price ID directly
       lineItems = [
         {
           price: input.priceId,
@@ -439,7 +413,6 @@ export class StripeProvider implements PaymentProvider {
         },
       ];
     } else if (input.amount) {
-      // Convert amount to cents (Stripe uses smallest currency unit)
       const amountInCents = Math.round(input.amount * 100);
       lineItems = [
         {
@@ -457,7 +430,6 @@ export class StripeProvider implements PaymentProvider {
       throw new Error("Either productId, priceId, or amount must be provided");
     }
 
-    // Create Checkout Session for one-time payment
     const metadata: Record<string, string> = {
       paylayer_provider: this.name,
     };
@@ -481,9 +453,6 @@ export class StripeProvider implements PaymentProvider {
       }
     );
 
-    // Get amount from input
-    // If using productId or priceId without amount, amount will be determined by the price
-    // and can be retrieved from the checkout session details or webhook
     const amount = input.amount || 0;
 
     return {
