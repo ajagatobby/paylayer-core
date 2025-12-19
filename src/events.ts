@@ -96,8 +96,13 @@ export function normalizeEvent(
   else if (providerName === "paypal") {
     if (eventType.includes("payment.capture.completed")) {
       type = "payment.success";
-    } else if (eventType.includes("payment.capture.denied")) {
+    } else if (
+      eventType.includes("payment.capture.denied") ||
+      eventType.includes("payment.capture.reversed")
+    ) {
       type = "payment.failed";
+    } else if (eventType.includes("payment.capture.pending")) {
+      type = "payment.success"; // Pending payments are still success events
     } else if (eventType.includes("billing.subscription.created")) {
       type = "subscription.created";
     } else if (eventType.includes("billing.subscription.updated")) {
@@ -108,6 +113,8 @@ export function normalizeEvent(
       type = "subscription.paused";
     } else if (eventType.includes("billing.subscription.activated")) {
       type = "subscription.resumed";
+    } else if (eventType.includes("billing.subscription.payment.failed")) {
+      type = "payment.failed";
     }
   }
   // Lemon Squeezy event mapping
@@ -961,9 +968,22 @@ export function normalizeEvent(
 
     // Check if this is a subscription event
     const isSubscriptionEvent = eventType.includes("billing.subscription");
+    // Check if this is a payment capture event
+    const isPaymentCaptureEvent = eventType.includes("payment.capture");
 
-    subscriptionId = typeof resource.id === "string" ? resource.id : undefined;
-    paymentId = subscriptionId;
+    // Extract IDs based on event type
+    if (isSubscriptionEvent) {
+      subscriptionId =
+        typeof resource.id === "string" ? resource.id : undefined;
+      paymentId = subscriptionId; // For subscription events, paymentId can be subscriptionId
+    } else if (isPaymentCaptureEvent) {
+      // For payment capture events, paymentId is the capture ID
+      paymentId = typeof resource.id === "string" ? resource.id : undefined;
+    } else {
+      // For other events, use resource.id as paymentId
+      paymentId = typeof resource.id === "string" ? resource.id : undefined;
+    }
+
     status = typeof resource.status === "string" ? resource.status : undefined;
     description =
       typeof resource.description === "string"
@@ -978,10 +998,48 @@ export function normalizeEvent(
     }
 
     // Extract amount and currency
-    // For subscriptions, check billing_info.outstanding_balance first
-    if (isSubscriptionEvent && resource.billing_info) {
+    // For payment capture events, extract from resource.amount directly
+    if (isPaymentCaptureEvent && resource.amount) {
+      const amountObj = resource.amount as Record<string, unknown>;
+      if (typeof amountObj.value === "string") {
+        amount = parseFloat(amountObj.value);
+      } else if (typeof amountObj.value === "number") {
+        amount = amountObj.value;
+      }
+      if (typeof amountObj.currency_code === "string") {
+        currency = amountObj.currency_code.toUpperCase() as CurrencyCode;
+      }
+    }
+    // For subscriptions, check billing_info.last_payment first, then outstanding_balance
+    else if (isSubscriptionEvent && resource.billing_info) {
       const billingInfo = resource.billing_info as Record<string, unknown>;
+
+      // Check last_payment first (more accurate for subscription amounts)
       if (
+        billingInfo.last_payment &&
+        typeof billingInfo.last_payment === "object"
+      ) {
+        const lastPayment = billingInfo.last_payment as Record<string, unknown>;
+        if (lastPayment.amount && typeof lastPayment.amount === "object") {
+          const lastPaymentAmount = lastPayment.amount as Record<
+            string,
+            unknown
+          >;
+          if (typeof lastPaymentAmount.value === "string") {
+            amount = parseFloat(lastPaymentAmount.value);
+          } else if (typeof lastPaymentAmount.value === "number") {
+            amount = lastPaymentAmount.value;
+          }
+          if (typeof lastPaymentAmount.currency_code === "string") {
+            currency =
+              lastPaymentAmount.currency_code.toUpperCase() as CurrencyCode;
+          }
+        }
+      }
+
+      // Fallback to outstanding_balance if last_payment not available
+      if (
+        amount === undefined &&
         billingInfo.outstanding_balance &&
         typeof billingInfo.outstanding_balance === "object"
       ) {
@@ -994,36 +1052,77 @@ export function normalizeEvent(
         } else if (typeof outstandingBalance.value === "number") {
           amount = outstandingBalance.value;
         }
-        if (typeof outstandingBalance.currency_code === "string") {
+        if (!currency && typeof outstandingBalance.currency_code === "string") {
           currency =
             outstandingBalance.currency_code.toUpperCase() as CurrencyCode;
         }
       }
     }
 
-    // Fallback: extract from resource.amount (for payment events)
-    if (amount === undefined) {
-      amount =
-        typeof resource.amount === "object" && resource.amount !== null
-          ? typeof (resource.amount as { value: unknown }).value === "string"
-            ? parseFloat((resource.amount as { value: string }).value)
-            : undefined
-          : undefined;
-    }
-    if (!currency) {
-      currency =
-        typeof resource.amount === "object" && resource.amount !== null
-          ? typeof (resource.amount as { currency_code: unknown })
-              .currency_code === "string"
-            ? ((
-                resource.amount as { currency_code: string }
-              ).currency_code.toUpperCase() as CurrencyCode)
-            : undefined
-          : undefined;
+    // Fallback: extract from resource.amount (for other payment events)
+    if (amount === undefined && resource.amount) {
+      const amountObj = resource.amount as Record<string, unknown>;
+      if (typeof amountObj.value === "string") {
+        amount = parseFloat(amountObj.value);
+      } else if (typeof amountObj.value === "number") {
+        amount = amountObj.value;
+      }
+      if (!currency && typeof amountObj.currency_code === "string") {
+        currency = amountObj.currency_code.toUpperCase() as CurrencyCode;
+      }
     }
 
-    // Extract customer info - for subscriptions, check subscriber first
-    if (isSubscriptionEvent && resource.subscriber) {
+    // Extract customer info - prioritize based on event type
+    // For payment capture events, check payer.payer_info first
+    if (isPaymentCaptureEvent && resource.payer) {
+      const payer = resource.payer as Record<string, unknown>;
+      const payerInfo = payer.payer_info as Record<string, unknown>;
+      if (payerInfo) {
+        // Extract email from payer.payer_info.email
+        if (typeof payerInfo.email === "string") {
+          email = payerInfo.email;
+        }
+
+        // Extract name from payer.payer_info
+        let payerName: string | undefined;
+        if (
+          typeof payerInfo.first_name === "string" &&
+          typeof payerInfo.last_name === "string"
+        ) {
+          payerName = `${payerInfo.first_name} ${payerInfo.last_name}`;
+        } else if (typeof payerInfo.first_name === "string") {
+          payerName = payerInfo.first_name;
+        } else if (typeof payerInfo.last_name === "string") {
+          payerName = payerInfo.last_name;
+        }
+
+        if (email || payerName) {
+          customer = {
+            email,
+            name: payerName,
+          };
+        }
+      }
+
+      // Fallback: check payment_source.paypal.account_id for email
+      if (!email && resource.payment_source) {
+        const paymentSource = resource.payment_source as Record<
+          string,
+          unknown
+        >;
+        if (paymentSource.paypal && typeof paymentSource.paypal === "object") {
+          const paypalSource = paymentSource.paypal as Record<string, unknown>;
+          if (typeof paypalSource.account_id === "string") {
+            // PayPal account_id is often an email
+            email = paypalSource.account_id;
+            if (!customer) customer = {};
+            customer.email = email;
+          }
+        }
+      }
+    }
+    // For subscriptions, check subscriber first
+    else if (isSubscriptionEvent && resource.subscriber) {
       const subscriber = resource.subscriber as Record<string, unknown>;
 
       // Extract email from subscriber.email_address
@@ -1056,7 +1155,7 @@ export function normalizeEvent(
       }
     }
 
-    // Fallback: extract from payer.payer_info (for payment events)
+    // Fallback: extract from payer.payer_info (for other payment events)
     if (!email && resource.payer) {
       const payer = resource.payer as Record<string, unknown>;
       const payerInfo = payer.payer_info as Record<string, unknown>;
@@ -1621,6 +1720,33 @@ export function normalizeEvent(
           ...metadataFromResource,
           ...(resource.custom as Record<string, unknown>),
         };
+      }
+
+      // For payment capture events, extract order_id from supplementary_data
+      if (eventType.includes("payment.capture")) {
+        if (
+          resource.supplementary_data &&
+          typeof resource.supplementary_data === "object"
+        ) {
+          const supplementaryData = resource.supplementary_data as Record<
+            string,
+            unknown
+          >;
+          if (
+            supplementaryData.related_ids &&
+            typeof supplementaryData.related_ids === "object"
+          ) {
+            const relatedIds = supplementaryData.related_ids as Record<
+              string,
+              unknown
+            >;
+            if (typeof relatedIds.order_id === "string") {
+              // Add order_id to metadata
+              if (!metadataFromResource) metadataFromResource = {};
+              metadataFromResource.order_id = relatedIds.order_id;
+            }
+          }
+        }
       }
 
       // For subscription events, check subscription resource

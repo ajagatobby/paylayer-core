@@ -675,20 +675,34 @@ export class PayPalProvider implements PaymentProvider {
     // PayPal webhook verification uses PayPal's verification API endpoint
     // This is the recommended approach per PayPal documentation
 
-    if (!signature || !headers) {
+    if (!headers) {
+      // eslint-disable-next-line no-console
+      console.warn("PayPal webhook verification: Missing headers");
       return false;
     }
 
-    // Extract required PayPal headers
-    const authAlgo = headers["paypal-auth-algo"] || headers["PAYPAL-AUTH-ALGO"];
-    const certUrl = headers["paypal-cert-url"] || headers["PAYPAL-CERT-URL"];
+    // Normalize headers to lowercase for case-insensitive lookup
+    const normalizedHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      normalizedHeaders[key.toLowerCase()] = value;
+    }
+
+    // Extract required PayPal headers (case-insensitive)
+    const authAlgo =
+      normalizedHeaders["paypal-auth-algo"] ||
+      normalizedHeaders["paypal_auth_algo"];
+    const certUrl =
+      normalizedHeaders["paypal-cert-url"] ||
+      normalizedHeaders["paypal_cert_url"];
     const transmissionId =
-      headers["paypal-transmission-id"] || headers["PAYPAL-TRANSMISSION-ID"];
+      normalizedHeaders["paypal-transmission-id"] ||
+      normalizedHeaders["paypal_transmission_id"];
     const transmissionSig =
-      headers["paypal-transmission-sig"] || headers["PAYPAL-TRANSMISSION-SIG"];
+      normalizedHeaders["paypal-transmission-sig"] ||
+      normalizedHeaders["paypal_transmission_sig"];
     const transmissionTime =
-      headers["paypal-transmission-time"] ||
-      headers["PAYPAL-TRANSMISSION-TIME"];
+      normalizedHeaders["paypal-transmission-time"] ||
+      normalizedHeaders["paypal_transmission_time"];
 
     // Validate all required headers are present
     if (
@@ -698,6 +712,14 @@ export class PayPalProvider implements PaymentProvider {
       !transmissionSig ||
       !transmissionTime
     ) {
+      // eslint-disable-next-line no-console
+      console.warn("PayPal webhook verification: Missing required headers", {
+        hasAuthAlgo: !!authAlgo,
+        hasCertUrl: !!certUrl,
+        hasTransmissionId: !!transmissionId,
+        hasTransmissionSig: !!transmissionSig,
+        hasTransmissionTime: !!transmissionTime,
+      });
       return false;
     }
 
@@ -745,6 +767,13 @@ export class PayPalProvider implements PaymentProvider {
       );
 
       if (!verificationResponse.ok) {
+        const errorText = await verificationResponse
+          .text()
+          .catch(() => "Unknown error");
+        // eslint-disable-next-line no-console
+        console.error(
+          `PayPal webhook verification failed: ${verificationResponse.status} - ${errorText}`
+        );
         return false;
       }
 
@@ -752,7 +781,14 @@ export class PayPalProvider implements PaymentProvider {
         verification_status: string;
       };
 
-      return verificationResult.verification_status === "SUCCESS";
+      const isValid = verificationResult.verification_status === "SUCCESS";
+      if (!isValid) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `PayPal webhook verification status: ${verificationResult.verification_status}`
+        );
+      }
+      return isValid;
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("PayPal webhook verification error:", error);
@@ -762,16 +798,26 @@ export class PayPalProvider implements PaymentProvider {
 
   normalizeWebhookEvent(rawEvent: unknown): unknown {
     const event = rawEvent as {
-      id: string;
-      event_type: string;
-      resource: unknown;
-      create_time: string;
+      id?: string;
+      event_type?: string;
+      eventType?: string; // Alternative field name
+      resource?: unknown;
+      create_time?: string;
+      createTime?: string; // Alternative field name
     };
+
+    // Handle missing or alternative field names
+    const eventType = event.event_type || event.eventType || "";
+    const eventId = event.id || "";
+    const resource = event.resource || {};
+    const createTime =
+      event.create_time || event.createTime || new Date().toISOString();
+
     return {
-      type: event.event_type,
-      id: event.id,
-      resource: event.resource,
-      create_time: event.create_time,
+      type: eventType,
+      id: eventId,
+      resource: resource,
+      create_time: createTime,
     };
   }
 }
