@@ -431,6 +431,13 @@ export class LemonSqueezyProvider implements PaymentProvider {
     }
 
     // Build checkout attributes
+    const customData: Record<string, unknown> = {
+      paylayer_provider: this.name,
+    };
+    if (input.metadata) {
+      Object.assign(customData, input.metadata);
+    }
+
     const checkoutAttributes: Record<string, unknown> = {
       product_options: {
         name: "One-time Payment",
@@ -445,9 +452,7 @@ export class LemonSqueezyProvider implements PaymentProvider {
       },
       checkout_data: {
         email: input.email,
-        custom: {
-          paylayer_provider: this.name,
-        },
+        custom: customData,
       },
       expires_at: null,
       preview: false,
@@ -586,6 +591,14 @@ export class LemonSqueezyProvider implements PaymentProvider {
     }
 
     // Create a checkout for subscription
+    const customData: Record<string, unknown> = {
+      paylayer_provider: this.name,
+      paylayer_plan: input.plan,
+    };
+    if (input.metadata) {
+      Object.assign(customData, input.metadata);
+    }
+
     const response = (await this.request("POST", "/v1/checkouts", {
       data: {
         type: "checkouts",
@@ -600,10 +613,7 @@ export class LemonSqueezyProvider implements PaymentProvider {
           },
           checkout_data: {
             email: input.email,
-            custom: {
-              paylayer_provider: this.name,
-              paylayer_plan: input.plan,
-            },
+            custom: customData,
           },
           expires_at: null,
           preview: false,

@@ -250,15 +250,32 @@ export class StripeProvider implements PaymentProvider {
           }
 
           if (typeof value === "object" && !Array.isArray(value)) {
-            // Handle nested objects (like metadata)
+            // Handle nested objects (like metadata, subscription_data, etc.)
             // Check if it's an empty object (for clearing fields)
             if (Object.keys(value as Record<string, unknown>).length === 0) {
               formData.append(key, "");
             } else {
-              for (const [nestedKey, nestedValue] of Object.entries(
+              // Check if this object contains nested objects or just primitive values
+              const hasNestedObjects = Object.values(
                 value as Record<string, unknown>
-              )) {
-                formData.append(`${key}[${nestedKey}]`, String(nestedValue));
+              ).some(
+                (v) => typeof v === "object" && v !== null && !Array.isArray(v)
+              );
+
+              if (hasNestedObjects) {
+                // Use recursive appendNestedObject for deeply nested structures
+                this.appendNestedObject(
+                  formData,
+                  key,
+                  value as Record<string, unknown>
+                );
+              } else {
+                // Simple nested object with only primitive values (like simple metadata)
+                for (const [nestedKey, nestedValue] of Object.entries(
+                  value as Record<string, unknown>
+                )) {
+                  formData.append(`${key}[${nestedKey}]`, String(nestedValue));
+                }
               }
             }
           } else if (Array.isArray(value)) {
@@ -441,6 +458,15 @@ export class StripeProvider implements PaymentProvider {
     }
 
     // Create Checkout Session for one-time payment
+    const metadata: Record<string, string> = {
+      paylayer_provider: this.name,
+    };
+    if (input.metadata) {
+      for (const [key, value] of Object.entries(input.metadata)) {
+        metadata[key] = String(value);
+      }
+    }
+
     const session = await this.request<StripeCheckoutSession>(
       "POST",
       "/v1/checkout/sessions",
@@ -451,9 +477,7 @@ export class StripeProvider implements PaymentProvider {
         customer_email: input.email,
         success_url: successUrl,
         cancel_url: cancelUrl,
-        metadata: {
-          paylayer_provider: this.name,
-        },
+        metadata,
       }
     );
 
@@ -568,6 +592,25 @@ export class StripeProvider implements PaymentProvider {
     }
 
     // Create Checkout Session for subscription
+    // For subscriptions, metadata must be in subscription_data.metadata to be attached to the subscription
+    // Session-level metadata is only on the checkout session, not the subscription
+    const sessionMetadata: Record<string, string> = {
+      paylayer_provider: this.name,
+      paylayer_plan: input.plan,
+    };
+
+    const subscriptionMetadata: Record<string, string> = {
+      paylayer_provider: this.name,
+      paylayer_plan: input.plan,
+    };
+    if (input.metadata) {
+      for (const [key, value] of Object.entries(input.metadata)) {
+        const stringValue = String(value);
+        sessionMetadata[key] = stringValue;
+        subscriptionMetadata[key] = stringValue; // Also add to subscription metadata
+      }
+    }
+
     const session = await this.request<StripeCheckoutSession>(
       "POST",
       "/v1/checkout/sessions",
@@ -583,9 +626,9 @@ export class StripeProvider implements PaymentProvider {
         customer_email: input.email,
         success_url: successUrl,
         cancel_url: cancelUrl,
-        metadata: {
-          paylayer_provider: this.name,
-          paylayer_plan: input.plan,
+        metadata: sessionMetadata,
+        subscription_data: {
+          metadata: subscriptionMetadata,
         },
       }
     );

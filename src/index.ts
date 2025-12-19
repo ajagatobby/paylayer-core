@@ -4,18 +4,29 @@ import {
   onPaymentFailed,
   onSubscriptionCreated,
   onSubscriptionCancelled,
-  webhook,
+  onSubscriptionUpdated,
+  onSubscriptionDeleted,
+  onSubscriptionPaused,
+  onSubscriptionResumed,
+  webhook as processWebhook,
+  type WebhookRequest,
 } from "./webhooks.js";
-
-// Attach webhook methods to pay object
-Object.assign(pay, {
-  onPaymentSuccess,
-  onPaymentFailed,
-  onSubscriptionCreated,
-  onSubscriptionCancelled,
-  webhook,
-});
 
 export { pay };
 export { Currency } from "./types.js";
 export type * from "./types.js";
+export type { CustomerInfo } from "./types.js";
+
+export const webhook = {
+  onPaymentSuccess,
+  onPaymentFailed,
+  onSubscriptionCreated,
+  onSubscriptionCancelled,
+  onSubscriptionUpdated,
+  onSubscriptionDeleted,
+  onSubscriptionPaused,
+  onSubscriptionResumed,
+  process: processWebhook,
+};
+
+export type { WebhookRequest };

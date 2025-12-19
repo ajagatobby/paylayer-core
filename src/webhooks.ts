@@ -82,6 +82,82 @@ export function onSubscriptionCancelled(handler: EventHandler): void {
 }
 
 /**
+ * Registers a handler for subscription update events
+ *
+ * @param handler - Function to call when subscription is updated
+ *
+ * @example
+ * ```ts
+ * pay.onSubscriptionUpdated((event) => {
+ *   console.log('Subscription updated:', event);
+ * });
+ * ```
+ */
+export function onSubscriptionUpdated(handler: EventHandler): void {
+  if (!handlers.has("subscription.updated")) {
+    handlers.set("subscription.updated", []);
+  }
+  handlers.get("subscription.updated")!.push(handler);
+}
+
+/**
+ * Registers a handler for subscription deletion events
+ *
+ * @param handler - Function to call when subscription is deleted
+ *
+ * @example
+ * ```ts
+ * pay.onSubscriptionDeleted((event) => {
+ *   console.log('Subscription deleted:', event);
+ * });
+ * ```
+ */
+export function onSubscriptionDeleted(handler: EventHandler): void {
+  if (!handlers.has("subscription.deleted")) {
+    handlers.set("subscription.deleted", []);
+  }
+  handlers.get("subscription.deleted")!.push(handler);
+}
+
+/**
+ * Registers a handler for subscription pause events
+ *
+ * @param handler - Function to call when subscription is paused
+ *
+ * @example
+ * ```ts
+ * pay.onSubscriptionPaused((event) => {
+ *   console.log('Subscription paused:', event);
+ * });
+ * ```
+ */
+export function onSubscriptionPaused(handler: EventHandler): void {
+  if (!handlers.has("subscription.paused")) {
+    handlers.set("subscription.paused", []);
+  }
+  handlers.get("subscription.paused")!.push(handler);
+}
+
+/**
+ * Registers a handler for subscription resume events
+ *
+ * @param handler - Function to call when subscription is resumed
+ *
+ * @example
+ * ```ts
+ * pay.onSubscriptionResumed((event) => {
+ *   console.log('Subscription resumed:', event);
+ * });
+ * ```
+ */
+export function onSubscriptionResumed(handler: EventHandler): void {
+  if (!handlers.has("subscription.resumed")) {
+    handlers.set("subscription.resumed", []);
+  }
+  handlers.get("subscription.resumed")!.push(handler);
+}
+
+/**
  * Webhook request type - compatible with Express, Fetch API, and other frameworks
  */
 export interface WebhookRequest {
@@ -136,10 +212,14 @@ export async function webhook(
     rawPayload = JSON.stringify(rawEvent);
   } else if ("body" in req) {
     rawEvent = req.body;
-    rawPayload =
-      typeof req.body === "string"
-        ? req.body
-        : Buffer.from(JSON.stringify(req.body));
+    // Check if rawBody is provided (from Express raw body middleware)
+    if ("rawBody" in req && typeof (req as any).rawBody === "string") {
+      rawPayload = (req as any).rawBody;
+    } else if (typeof req.body === "string") {
+      rawPayload = req.body;
+    } else {
+      rawPayload = Buffer.from(JSON.stringify(req.body));
+    }
   } else {
     throw new Error("Invalid webhook request: missing body or json method");
   }

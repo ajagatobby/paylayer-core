@@ -238,14 +238,19 @@ export class PolarProvider implements PaymentProvider {
     }
 
     // Use product_id + product_price_id format for one-time payment
+    const metadata: Record<string, unknown> = {
+      paylayer_provider: this.name,
+      currency: input.currency,
+    };
+    if (input.metadata) {
+      Object.assign(metadata, input.metadata);
+    }
+
     const checkoutPayload: Record<string, unknown> = {
       product_id: productId,
       product_price_id: oneTimePrice.id,
       success_url: successUrl,
-      metadata: {
-        paylayer_provider: this.name,
-        currency: input.currency,
-      },
+      metadata,
     };
 
     // Only include email if provided and not a test/example domain
@@ -378,16 +383,21 @@ export class PolarProvider implements PaymentProvider {
 
     // Create checkout session for subscription
     // Polar will create the subscription automatically when customer completes checkout
+    const metadata: Record<string, unknown> = {
+      paylayer_provider: this.name,
+      paylayer_plan: input.plan,
+      currency: input.currency,
+      paylayer_type: "subscription",
+    };
+    if (input.metadata) {
+      Object.assign(metadata, input.metadata);
+    }
+
     const checkoutPayload: Record<string, unknown> = {
       products: [input.plan], // Product ID for subscription
       success_url: successUrl,
       return_url: cancelUrl, // Polar uses return_url for cancel
-      metadata: {
-        paylayer_provider: this.name,
-        paylayer_plan: input.plan,
-        currency: input.currency,
-        paylayer_type: "subscription",
-      },
+      metadata,
     };
 
     // Include customer email

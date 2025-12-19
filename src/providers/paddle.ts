@@ -269,6 +269,14 @@ export class PaddleProvider implements PaymentProvider {
 
     // Create a transaction - Paddle will use the Default Payment Link from dashboard
     // Don't set checkout.url to ensure we use Paddle's default payment link
+    const customData: Record<string, unknown> = {
+      paylayer_provider: this.name,
+      amount: input.amount?.toString() || "0",
+    };
+    if (input.metadata) {
+      Object.assign(customData, input.metadata);
+    }
+
     const transactionPayload: Record<string, unknown> = {
       items: [
         {
@@ -276,10 +284,7 @@ export class PaddleProvider implements PaymentProvider {
           quantity: 1,
         },
       ],
-      custom_data: {
-        paylayer_provider: this.name,
-        amount: input.amount?.toString() || "0",
-      },
+      custom_data: customData,
     };
 
     // Use customer object format if email is provided
@@ -388,6 +393,14 @@ export class PaddleProvider implements PaymentProvider {
     // The subscription will be created automatically when the customer completes checkout
     // The plan should be a Paddle price ID with recurring billing
     // Don't set checkout.url to ensure we use Paddle's default payment link
+    const customData: Record<string, unknown> = {
+      paylayer_provider: this.name,
+      paylayer_plan: input.plan,
+    };
+    if (input.metadata) {
+      Object.assign(customData, input.metadata);
+    }
+
     const subscriptionPayload: Record<string, unknown> = {
       items: [
         {
@@ -395,10 +408,7 @@ export class PaddleProvider implements PaymentProvider {
           quantity: 1,
         },
       ],
-      custom_data: {
-        paylayer_provider: this.name,
-        paylayer_plan: input.plan,
-      },
+      custom_data: customData,
     };
 
     // Use customer object format

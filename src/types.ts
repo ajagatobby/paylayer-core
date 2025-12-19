@@ -163,6 +163,7 @@ export interface ChargeInput {
   email?: string;
   successUrl?: string;
   cancelUrl?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ChargeResult {
@@ -181,6 +182,7 @@ export interface SubscribeInput {
   email?: string;
   successUrl?: string;
   cancelUrl?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface SubscriptionResult {
@@ -213,8 +215,25 @@ export type EventType =
   | "payment.failed"
   | "subscription.created"
   | "subscription.cancelled"
+  | "subscription.updated"
+  | "subscription.deleted"
   | "subscription.paused"
   | "subscription.resumed";
+
+export interface CustomerInfo {
+  id?: string;
+  email?: string;
+  name?: string;
+  phone?: string;
+  address?: {
+    line1?: string;
+    line2?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+    country?: string;
+  };
+}
 
 export interface NormalizedEvent {
   type: EventType;
@@ -224,7 +243,15 @@ export interface NormalizedEvent {
   provider: Provider;
   subscriptionId?: string;
   paymentId?: string;
+  customerId?: string;
+  customer?: CustomerInfo;
+  status?: string;
+  description?: string;
+  createdAt?: string;
+  plan?: string;
+  productId?: string;
   metadata?: Record<string, unknown>;
+  providerResponse?: unknown;
 }
 
 export type EventHandler = (event: NormalizedEvent) => void | Promise<void>;

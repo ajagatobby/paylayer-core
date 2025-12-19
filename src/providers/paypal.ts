@@ -248,22 +248,34 @@ export class PayPalProvider implements PaymentProvider {
       process.env.PAYPAL_CANCEL_URL ||
       "https://app.example.com/cancel";
 
+    const purchaseUnit: {
+      amount: {
+        currency_code: string;
+        value: string;
+      };
+      description: string;
+      payee?: { email_address: string };
+      custom_id?: string;
+    } = {
+      amount: {
+        currency_code: input.currency,
+        value: amount.toFixed(2),
+      },
+      description: `Payment of ${amount} ${input.currency}`,
+      payee: input.email
+        ? {
+            email_address: input.email,
+          }
+        : undefined,
+    };
+
+    if (input.metadata) {
+      purchaseUnit.custom_id = JSON.stringify(input.metadata);
+    }
+
     const order = (await this.request("POST", "/v2/checkout/orders", {
       intent: "CAPTURE",
-      purchase_units: [
-        {
-          amount: {
-            currency_code: input.currency,
-            value: amount.toFixed(2),
-          },
-          description: `Payment of ${amount} ${input.currency}`,
-          payee: input.email
-            ? {
-                email_address: input.email,
-              }
-            : undefined,
-        },
-      ],
+      purchase_units: [purchaseUnit],
       application_context: {
         return_url: returnUrl,
         cancel_url: cancelUrl,
@@ -391,22 +403,37 @@ export class PayPalProvider implements PaymentProvider {
 
     // PayPal uses Subscriptions API
     // Plan ID must be pre-configured in PayPal
+    const subscriptionData: {
+      plan_id: string;
+      subscriber: { email_address: string };
+      application_context: {
+        brand_name: string;
+        return_url: string;
+        cancel_url: string;
+      };
+      custom_id?: string;
+    } = {
+      plan_id: input.plan, // Plan ID must be pre-configured in PayPal
+      subscriber: {
+        email_address: input.email,
+      },
+      application_context: {
+        brand_name: process.env.PAYPAL_BRAND_NAME || "PayLayer",
+        return_url:
+          process.env.PAYPAL_RETURN_URL || "https://app.example.com/success",
+        cancel_url:
+          process.env.PAYPAL_CANCEL_URL || "https://app.example.com/cancel",
+      },
+    };
+
+    if (input.metadata) {
+      subscriptionData.custom_id = JSON.stringify(input.metadata);
+    }
+
     const subscription = (await this.request(
       "POST",
       "/v1/billing/subscriptions",
-      {
-        plan_id: input.plan, // Plan ID must be pre-configured in PayPal
-        subscriber: {
-          email_address: input.email,
-        },
-        application_context: {
-          brand_name: process.env.PAYPAL_BRAND_NAME || "PayLayer",
-          return_url:
-            process.env.PAYPAL_RETURN_URL || "https://app.example.com/success",
-          cancel_url:
-            process.env.PAYPAL_CANCEL_URL || "https://app.example.com/cancel",
-        },
-      }
+      subscriptionData
     )) as {
       id: string;
       status: string;
