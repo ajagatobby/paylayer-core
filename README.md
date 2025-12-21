@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="logo.png" alt="PayLayer Logo" width="200" />
+
 # 💳 @paylayer/core
 
 **Build billing once. Switch providers anytime.**
