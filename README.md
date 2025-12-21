@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="logo.png" alt="PayLayer Logo" width="200" />
+<img src="https://raw.githubusercontent.com/ajagatobby/paylayer-core/main/logo.png" alt="PayLayer Logo" width="200" />
 
 # 💳 @paylayer/core
 
@@ -67,6 +67,11 @@ PayLayer is a unified payments SDK that lets you integrate billing into your app
 ```bash
 npm install @paylayer/core
 ```
+
+### Related Packages & Examples
+
+- **[@paylayer/react](https://www.npmjs.com/package/@paylayer/react)** - React hooks and components for PayLayer integration
+- **[PayLayer Express Example](https://github.com/ajagatobby/paylayer-core-example)** - Complete Express.js quickstarter with service layer architecture, webhook handling, and all payment operations
 
 ---
 
